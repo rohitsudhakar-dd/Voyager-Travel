@@ -152,6 +152,7 @@ verify: ## Run the phase exit-criteria scripts against a running stack
 	@./scripts/verify-search.sh
 	@./scripts/verify-booking.sh
 	@./scripts/verify-gateway.sh
+	@./scripts/verify-tracing.sh
 
 deploy: ## Pull, stamp DD_VERSION, build, rolling restart, migrate, healthcheck
 	@echo "not yet implemented (phase 13)"
