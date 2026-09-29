@@ -1,0 +1,398 @@
+{
+  "title": "Voyager — AI Support",
+  "description": "D6 from 01-PRD.md § 7: LLM latency, tokens, cost, tool-call success rate and escalation rate.\n\nThere is no `voyager.support.cost_usd` metric in 05-FUNCTIONALITY.md § 14 and this dashboard does not invent one. Cost is derived on the widget from `voyager.support.tokens` at a fixed synthetic tariff, stated in that widget's description. Voyager talks to a mock model, so any tariff is arbitrary by construction; putting an explicit constant in the formula is more honest than implying the number came from an invoice, and it means Phase 10 has one fewer metric to emit.\n\nLatency uses the `spans` data source rather than trace metrics because the interesting spans are the LLM calls inside the request, not the request itself.",
+  "layout_type": "ordered",
+  "reflow_type": "auto",
+  "template_variables": [
+    {
+      "name": "env",
+      "prefix": "env",
+      "defaults": ["demo"]
+    },
+    {
+      "name": "service",
+      "prefix": "service",
+      "defaults": ["voyager-ai-support"]
+    },
+    {
+      "name": "route",
+      "prefix": "resource_name",
+      "defaults": ["*"]
+    },
+    {
+      "name": "user_tier",
+      "prefix": "tier",
+      "defaults": ["*"]
+    }
+  ],
+  "widgets": [
+    {
+      "definition": {
+        "type": "note",
+        "content": "**Voyager — AI Support.** Scenario S9 breaks four things at once, and each one shows up in a different widget here:\n\n- `llm_latency_ms=4000` → first-token latency, and `support_first_token` on **Voyager — Frontend Experience**\n- `llm_degrade_tools=true` → tool-call success rate falls because the model answers in prose instead of calling the booking tool\n- `llm_token_bloat=true` → tokens and derived cost climb without more conversations\n- `llm_error_rate=0.05` → errors on the ai-support service\n- `llm_hallucinate=true` → invisible on every metric here; it is only caught by reading output, which is the point of the widget at the bottom\n\nRevert with `scripts/chaos.sh revert S9`.",
+        "background_color": "blue",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "top",
+        "show_tick": false,
+        "tick_pos": "50%",
+        "tick_edge": "left",
+        "has_padding": true
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Volume and outcomes",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Conversations by intent per minute",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "area",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "conversations",
+                      "query": "sum:voyager.support.conversations{$env} by {intent}.as_rate()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "conversations * 60" }],
+                  "style": { "palette": "cool", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Tool-call success rate (%)",
+              "description": "`voyager.support.tool_calls` is tagged with `outcome`, so success is the `outcome:ok` share of all calls. `llm_degrade_tools` does not make tool calls fail — it stops them happening at all, so watch the absolute call rate next to this ratio.",
+              "autoscale": false,
+              "precision": 1,
+              "custom_unit": "%",
+              "text_align": "center",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "ok",
+                      "query": "sum:voyager.support.tool_calls{$env,outcome:ok}.as_count()",
+                      "aggregator": "sum"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "all",
+                      "query": "sum:voyager.support.tool_calls{$env}.as_count()",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "100 * ok / all" }],
+                  "conditional_formats": [
+                    { "comparator": "<", "value": 90, "palette": "white_on_red" },
+                    { "comparator": "<", "value": 97, "palette": "white_on_yellow" },
+                    { "comparator": ">=", "value": 97, "palette": "white_on_green" }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Escalation rate (%)",
+              "description": "Escalations over conversations. A rising escalation rate with a healthy tool-call rate means the assistant is working and the questions are genuinely hard; a rising escalation rate with a falling tool-call rate means the assistant has stopped being able to look anything up.",
+              "autoscale": false,
+              "precision": 1,
+              "custom_unit": "%",
+              "text_align": "center",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "escalations",
+                      "query": "sum:voyager.support.escalations{$env}.as_count()",
+                      "aggregator": "sum"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "conversations",
+                      "query": "sum:voyager.support.conversations{$env}.as_count()",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "100 * escalations / conversations" }],
+                  "conditional_formats": [
+                    { "comparator": ">", "value": 25, "palette": "white_on_red" },
+                    { "comparator": ">", "value": 15, "palette": "white_on_yellow" },
+                    { "comparator": "<=", "value": 15, "palette": "white_on_green" }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Tool calls per minute by tool and outcome",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "bars",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "tool_calls",
+                      "query": "sum:voyager.support.tool_calls{$env} by {tool,outcome}.as_rate()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "tool_calls * 60" }],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Escalations by intent",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "escalations",
+                      "query": "sum:voyager.support.escalations{$env} by {intent}",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "escalations", "limit": { "count": 10, "order": "desc" } }]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Tokens and cost",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Tokens per minute by direction and model",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "area",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "tokens",
+                      "query": "sum:voyager.support.tokens{$env} by {direction,model}.as_rate()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "tokens * 60" }],
+                  "style": { "palette": "purple", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Tokens per conversation",
+              "description": "The cleanest single number for `llm_token_bloat`: it rises even when traffic is flat, which total-token graphs cannot distinguish from a busy hour.",
+              "autoscale": false,
+              "precision": 0,
+              "text_align": "center",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "tokens",
+                      "query": "sum:voyager.support.tokens{$env}.as_count()",
+                      "aggregator": "sum"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "conversations",
+                      "query": "sum:voyager.support.conversations{$env}.as_count()",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "tokens / conversations" }]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Estimated cost per hour (USD, synthetic tariff)",
+              "description": "Derived, not measured. The tariff is 0.50 USD per million input tokens and 1.50 USD per million output tokens — a plausible mid-range price applied to a mock model, chosen only so the cost curve has the right shape and the input/output asymmetry is visible. Do not quote this number as a real spend figure. If a real tariff is ever needed, the right fix is a `voyager.support.cost_usd` metric emitted by ai-support with the price table next to the model config, not a bigger constant in a dashboard.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "area",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "input_tokens",
+                      "query": "sum:voyager.support.tokens{$env,direction:input}.as_rate()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "output_tokens",
+                      "query": "sum:voyager.support.tokens{$env,direction:output}.as_rate()"
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "input_tokens * 3600 * 0.5 / 1000000", "alias": "Input cost/hour" },
+                    { "formula": "output_tokens * 3600 * 1.5 / 1000000", "alias": "Output cost/hour" }
+                  ],
+                  "style": { "palette": "orange", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Latency and reliability",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Request latency p50 / p95 / p99 (ms)",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "p50",
+                      "query": "p50:trace.fastapi.request{$env,service:voyager-ai-support,$route}"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "p95",
+                      "query": "p95:trace.fastapi.request{$env,service:voyager-ai-support,$route}"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "p99",
+                      "query": "p99:trace.fastapi.request{$env,service:voyager-ai-support,$route}"
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "p50 * 1000", "alias": "p50" },
+                    { "formula": "p95 * 1000", "alias": "p95" },
+                    { "formula": "p99 * 1000", "alias": "p99" }
+                  ],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Error rate (%)",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "bars",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "errors",
+                      "query": "sum:trace.fastapi.request.errors{$env,service:voyager-ai-support,$route}.as_count()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "hits",
+                      "query": "sum:trace.fastapi.request.hits{$env,service:voyager-ai-support,$route}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "100 * errors / hits", "alias": "Error rate %" }],
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "list_stream",
+              "title": "Recent LLM Observability traces — read the answers",
+              "description": "`llm_hallucinate` produces a confident, well-formed, entirely fictional PNR. No metric on this dashboard moves. The only detection is a human or an evaluation reading the output, which is why this widget is here rather than a fifth graph.",
+              "requests": [
+                {
+                  "response_format": "event_list",
+                  "query": {
+                    "data_source": "llm_observability_stream",
+                    "query_string": "",
+                    "indexes": [],
+                    "sort": { "column": "timestamp", "order": "desc" }
+                  },
+                  "columns": [
+                    { "field": "timestamp", "width": "auto" },
+                    { "field": "@duration", "width": "compact" },
+                    { "field": "@status", "width": "compact" },
+                    { "field": "content", "width": "full" }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

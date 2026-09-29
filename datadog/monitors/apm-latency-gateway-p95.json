@@ -1,0 +1,28 @@
+{
+  "name": "[Voyager] voyager-gateway p95 latency above 2 s",
+  "type": "query alert",
+  "query": "avg(last_10m):p95:trace.fastify.request{env:demo,service:voyager-gateway} > 2",
+  "message": "{{#is_alert}}The API gateway's p95 is {{value}} seconds. Every browser request goes through this service, so whatever is slow downstream, guests are feeling it now.{{/is_alert}}\n{{#is_warning}}Gateway p95 is {{value}} seconds, past the {{warn_threshold}} second warning line.{{/is_warning}}\n\n**Read this one second, not first.** The gateway has almost no logic of its own: it authenticates, validates and forwards. Its latency is the sum of its dependencies, so an alert here is a symptom and the cause is nearly always in search, pricing, booking or payment. If a per-service latency monitor for one of those is also alerting, go there and ignore this one.\n\n**When only this monitor is firing**, the interesting possibilities are:\n- A dependency that is slow but under its own threshold, with the gateway's fan-out amplifying it.\n- Rate limiting or session lookups against Redis — `redis_latency_ms` adds delay to every Redis operation, including the gateway's.\n- Node event-loop saturation. Check runtime metrics and the container CPU widget.\n\n**Where to look.** *Voyager — Service Overview*, grouped by `resource_name`, tells you which route slowed down; a single route means a single dependency. Then *Voyager — Checkout Deep Dive* for the stage breakdown.\n\n**Chaos flags that produce this.** `service_latency_ms` (which takes a service→milliseconds map and can target `voyager-gateway` directly) and `redis_latency_ms`. Anything that slows a downstream service — `gds_latency_ms`, `payment_latency_ms`, `db_slow_query_ms` — will surface here too. `scripts/chaos.sh status` lists what is set; `make chaos-reset` clears all of it and undoes the side effects.\n{{#is_recovery}}Gateway p95 is back under threshold.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:apm-latency-gateway-p95",
+    "service:voyager-gateway",
+    "signal:latency"
+  ],
+  "priority": 2,
+  "options": {
+    "thresholds": {
+      "critical": 2,
+      "warning": 1.2
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

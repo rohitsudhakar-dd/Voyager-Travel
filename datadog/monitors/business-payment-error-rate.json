@@ -1,0 +1,28 @@
+{
+  "name": "[Voyager] Payment error rate above 10% of attempts",
+  "type": "query alert",
+  "query": "sum(last_5m):100 * ( sum:voyager.payment.errors{env:demo}.as_count() / ( sum:voyager.payment.errors{env:demo}.as_count() + sum:voyager.payment.authorized{env:demo}.as_count() + sum:voyager.payment.declined{env:demo}.as_count() ) ) > 10",
+  "message": "{{#is_alert}}{{value}}% of payment attempts are ending in an error rather than a decision. One attempt in ten is neither authorised nor declined — we simply do not know what happened to it.{{/is_alert}}\n\n**This is the business view, not the transport view.** The denominator is every attempt that reached a conclusion: authorised, declined, or errored. That makes the number directly comparable to a payment-provider success rate, which is not true of the APM error rate on `voyager-payment` — that one is diluted by health checks, webhooks and reads.\n\n**Likely cause.** The provider is refusing or timing out. Open *Voyager — Checkout Deep Dive* → *Authorised vs declined vs errored per minute*: if the errored line rose while the declined line did not, the provider is broken rather than strict. *Payment errors by kind* breaks it down by `error_kind`, and *Provider latency p95 by operation* tells you whether it is failing slowly (overloaded) or quickly (refusing).\n\n**Chaos flag that reverses it.** `payment_error_rate` — it makes `mock-payments` return 500, which is explicitly an error and not a decline. Scenario **S2** sets it to 0.30. Clear it with `scripts/chaos.sh set payment_error_rate 0`, or unwind the brownout with `scripts/chaos.sh revert S2`.\n\n**Why this monitor exists as a separate object.** It is the first leg of the composite **[Voyager] Checkout degraded**, which pages only when payment errors and falling booking throughput are happening at the same time. Kept alone, this monitor is a supporting signal: a provider having a bad five minutes while bookings keep confirming is not worth waking anyone for.\n{{#is_recovery}}Payment error rate is back under 10% of attempts.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:business-payment-error-rate",
+    "service:voyager-payment",
+    "signal:errors",
+    "composite_leg:checkout-degraded"
+  ],
+  "priority": 3,
+  "options": {
+    "thresholds": {
+      "critical": 10
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

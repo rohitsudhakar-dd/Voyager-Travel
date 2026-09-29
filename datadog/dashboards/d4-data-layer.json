@@ -1,0 +1,510 @@
+{
+  "title": "Voyager — Data Layer",
+  "description": "D4 from 01-PRD.md § 7: Postgres, Redis and Kafka.\n\nThe Postgres and Redis widgets use Datadog integration metrics collected by the Agent's `postgres` and `redisdb` checks rather than anything Voyager emits, so they are the only widgets on any Voyager dashboard that work before Phase 8 lands. The `postgresql.queries.*` family is Database Monitoring only: if DBM is not enabled on the instance, those three widgets stay empty while the connection and lock widgets fill normally, which is a confusing failure unless you know to expect it.\n\n`$service`, `$route` and `$user_tier` are present for cross-dashboard consistency and are wired only into the Voyager-emitted widgets. Infrastructure metrics carry none of those tags; scoping them by `service` would empty the dashboard.",
+  "layout_type": "ordered",
+  "reflow_type": "auto",
+  "template_variables": [
+    {
+      "name": "env",
+      "prefix": "env",
+      "defaults": ["demo"]
+    },
+    {
+      "name": "service",
+      "prefix": "service",
+      "defaults": ["*"]
+    },
+    {
+      "name": "route",
+      "prefix": "resource_name",
+      "defaults": ["*"]
+    },
+    {
+      "name": "user_tier",
+      "prefix": "tier",
+      "defaults": ["*"]
+    }
+  ],
+  "widgets": [
+    {
+      "definition": {
+        "type": "note",
+        "content": "**Voyager — Data Layer.** Three stores, three failure modes worth rehearsing:\n\n- **Postgres** — `db_drop_index` and `db_n_plus_one` (S3) flip a plan from Index Scan to Seq Scan; `db_lock_storm` and `db_pool_starvation` (S10) exhaust the pool.\n- **Redis** — `redis_disabled` and `cache_ttl_seconds=1` (S4) collapse the hit ratio and multiply GDS fan-out.\n- **Kafka** — `kafka_consumer_pause=voyager-notifications-v1` and `kafka_slow_consumer_ms` (S5) grow real consumer lag; `kafka_poison_rate` and `email_failure_rate` fill the DLQ.",
+        "background_color": "gray",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "top",
+        "show_tick": false,
+        "tick_pos": "50%",
+        "tick_edge": "left",
+        "has_padding": true
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Postgres — query performance (Database Monitoring)",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Slowest normalised queries — mean ms per execution",
+              "description": "`postgresql.queries.time` is cumulative execution time in nanoseconds and `postgresql.queries.count` is executions, both per `query_signature`, so their ratio is mean time per execution. There is no `postgresql.queries.duration` metric despite what 01-PRD.md § 6.2 originally said; only `.duration.max` and `.duration.sum` exist, and neither is a mean.",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "total_time",
+                      "query": "sum:postgresql.queries.time{$env} by {query_signature}",
+                      "aggregator": "sum"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "executions",
+                      "query": "sum:postgresql.queries.count{$env} by {query_signature}",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [
+                    {
+                      "formula": "(total_time / executions) / 1000000",
+                      "alias": "Mean ms",
+                      "limit": { "count": 15, "order": "desc" }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Rows read per execution",
+              "description": "The tell for scenario S3. Dropping `idx_bookings_user_id_created_at` does not change the SQL, so the query signature stays the same while rows read per execution jumps by orders of magnitude — a sequential scan reading the whole table to answer the same question.",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "rows",
+                      "query": "sum:postgresql.queries.rows{$env} by {query_signature}",
+                      "aggregator": "sum"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "executions",
+                      "query": "sum:postgresql.queries.count{$env} by {query_signature}",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [
+                    {
+                      "formula": "rows / executions",
+                      "alias": "Rows per execution",
+                      "limit": { "count": 15, "order": "desc" }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Sequential scans vs index scans",
+              "description": "Two gauges of cumulative counters, so the shape that matters is the slope. Sequential scans overtaking index scans on the bookings table is the plan flip S3 demonstrates.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "seq",
+                      "query": "per_second(sum:postgresql.seq_scans{$env} by {table})"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "idx",
+                      "query": "per_second(sum:postgresql.index_scans{$env} by {table})"
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "seq", "alias": "Seq scans/s" },
+                    { "formula": "idx", "alias": "Index scans/s" }
+                  ],
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Postgres — connections and locks",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Connection pool usage (%)",
+              "description": "`db_pool_starvation` clamps SQLAlchemy to two connections. That shows up as *falling* server-side connections combined with rising `booking.acquire_hold_lock` latency on Checkout Deep Dive — the pool, not Postgres, is the queue.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true, "max": "100" },
+              "markers": [
+                { "value": "y = 80", "display_type": "warning dashed", "label": "80%" }
+              ],
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "pct",
+                      "query": "max:postgresql.percent_usage_connections{$env}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "pct * 100", "alias": "Connections used %" }],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Locks, waiting queries and deadlocks",
+              "description": "Scenario S10 pairs `db_lock_storm` with `hold_lock_contention`. Waiting queries climbing while locks stay flat means sessions are queueing behind an advisory lock held in application code, not behind a row lock.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "locks",
+                      "query": "sum:postgresql.locks{$env}"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "waiting",
+                      "query": "max:postgresql.active_waiting_queries{$env}"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "deadlocks",
+                      "query": "sum:postgresql.deadlocks.count{$env}.as_count()"
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "locks", "alias": "Locks held" },
+                    { "formula": "waiting", "alias": "Waiting queries" },
+                    { "formula": "deadlocks", "alias": "Deadlocks" }
+                  ],
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Redis",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Search cache hit ratio (%)",
+              "description": "Taken from the application's own `cache_hit` tag rather than Redis keyspace statistics, because `redis_disabled` makes the application skip Redis entirely — there is no miss to count at the Redis level, so the server-side hit ratio would stay misleadingly perfect.",
+              "autoscale": false,
+              "precision": 1,
+              "custom_unit": "%",
+              "text_align": "center",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "hits",
+                      "query": "sum:voyager.search.requests{$env,cache_hit:true}.as_count()",
+                      "aggregator": "sum"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "total",
+                      "query": "sum:voyager.search.requests{$env}.as_count()",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "100 * hits / total" }],
+                  "conditional_formats": [
+                    { "comparator": "<", "value": 40, "palette": "white_on_red" },
+                    { "comparator": "<", "value": 60, "palette": "white_on_yellow" },
+                    { "comparator": ">=", "value": 60, "palette": "white_on_green" }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Redis keyspace hit ratio (%)",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true, "max": "100" },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "hits",
+                      "query": "avg:redis.stats.keyspace_hits{$env}"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "misses",
+                      "query": "avg:redis.stats.keyspace_misses{$env}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "100 * hits / (hits + misses)", "alias": "Hit ratio %" }],
+                  "style": { "palette": "cool", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Keys evicted per minute",
+              "description": "`redis.keys.evicted` is submitted as a gauge of Redis's cumulative `evicted_keys` counter, so a raw threshold on it would latch on for ever after the first eviction and reset to zero on container restart. `diff()` turns it back into a per-interval delta, and `clamp_min` discards the negative spike a restart produces.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["sum", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "bars",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "evicted",
+                      "query": "clamp_min(diff(avg:redis.keys.evicted{$env}), 0)"
+                    }
+                  ],
+                  "formulas": [{ "formula": "evicted", "alias": "Evictions" }],
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Memory used, clients and ops/s",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "mem",
+                      "query": "avg:redis.mem.used{$env}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "mem / 1048576", "alias": "Memory used (MiB)" }],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                },
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "clients",
+                      "query": "avg:redis.net.clients{$env}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "clients", "alias": "Connected clients" }],
+                  "style": { "palette": "grey", "line_type": "solid", "line_width": "thin" }
+                },
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "ops",
+                      "query": "avg:redis.net.instantaneous_ops_per_sec{$env}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "ops", "alias": "Ops/s" }],
+                  "style": { "palette": "cool", "line_type": "solid", "line_width": "thin" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Kafka and the notification pipeline",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Consumer lag by group and topic",
+              "description": "The three consumer groups from 05-FUNCTIONALITY.md § 6 are `voyager-loyalty-v1`, `voyager-notifications-v1` and `voyager-booking-payments-v1`. `kafka_consumer_pause` takes a group name, so the paused group is the one whose line climbs linearly — a stopped consumer, not a slow one.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "markers": [
+                { "value": "y = 1000", "display_type": "error dashed", "label": "Monitor threshold" }
+              ],
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "lag",
+                      "query": "sum:kafka.consumer_lag{$env} by {consumer_group,topic}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "lag" }],
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "End-to-end notification lag (seconds)",
+              "description": "Offset lag answers \"how many messages behind\"; this answers \"how stale is the newest thing we delivered\". A guest who booked ten minutes ago and has no email cares only about the second number.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "lag_seconds",
+                      "query": "max:voyager.notifications.lag_seconds{$env} by {consumer_group}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "lag_seconds" }],
+                  "style": { "palette": "orange", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Notifications sent vs dead-lettered per minute",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "sent",
+                      "query": "sum:voyager.notifications.sent{$env}.as_rate()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "sent * 60", "alias": "Sent/min" }],
+                  "style": { "palette": "green", "line_type": "solid", "line_width": "normal" }
+                },
+                {
+                  "display_type": "bars",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "dlq",
+                      "query": "sum:voyager.notifications.dlq{$env}.as_rate()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "dlq * 60", "alias": "Dead-lettered/min" }],
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Dead-letter reasons by template",
+              "description": "`email_failure_rate` produces `failure_reason` values from the mock's 422; `kafka_poison_rate` produces deserialisation failures. Two different flags, two different rows here, and only the second one is Voyager's bug.",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "dlq",
+                      "query": "sum:voyager.notifications.dlq{$env} by {template,failure_reason}",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "dlq", "limit": { "count": 10, "order": "desc" } }]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

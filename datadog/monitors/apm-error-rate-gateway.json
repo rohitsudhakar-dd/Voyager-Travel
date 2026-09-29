@@ -1,0 +1,28 @@
+{
+  "name": "[Voyager] voyager-gateway error rate above 5%",
+  "type": "query alert",
+  "query": "sum(last_10m):100 * ( sum:trace.fastify.request.errors{env:demo,service:voyager-gateway}.as_count() / sum:trace.fastify.request.hits{env:demo,service:voyager-gateway}.as_count() ) > 5",
+  "message": "{{#is_alert}}{{value}}% of requests through the API gateway are failing. Because the gateway fronts every call the browser makes, this number is the closest thing Voyager has to a single \"is the site up\" signal.{{/is_alert}}\n{{#is_warning}}Gateway error rate is {{value}}%, past the {{warn_threshold}}% warning line.{{/is_warning}}\n\n**Likely cause.** The gateway generates very few errors of its own. What it does is faithfully report the failures of whatever it called, so the useful question is which downstream service is failing and whether the gateway is turning that into a 5xx or degrading gracefully.\n\n**Where to look.**\n1. *Voyager — Service Overview* → the three *Error rate heatmap* widgets. One dark row identifies the culprit service; several dark rows at once usually means a shared dependency such as Postgres or Redis.\n2. Group this monitor's metric by `resource_name` in the metric explorer. Errors confined to one route are a single broken dependency; errors spread across every route are the gateway or its own dependencies.\n3. **Error Tracking** for `voyager-gateway`. The typed exception hierarchy in 05-FUNCTIONALITY.md § 13 means issues group cleanly, so one issue with a spike is a far better lead than a list of stack traces.\n\n**Chaos flags that produce this.** `service_error_rate` takes a service→rate map and can inject synthetic 500s into `voyager-gateway` itself. More often the cause is downstream: `gds_error_rate` (scenario **S1**), `payment_error_rate` (scenario **S2**), `llm_error_rate` (scenario **S9**), or `db_pool_starvation` exhausting connections under scenario **S10**. Run `scripts/chaos.sh status` to see which is set, and `make chaos-reset` to clear all of them.\n{{#is_recovery}}Gateway error rate is back under 5%.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:apm-error-rate-gateway",
+    "service:voyager-gateway",
+    "signal:errors"
+  ],
+  "priority": 1,
+  "options": {
+    "thresholds": {
+      "critical": 5,
+      "warning": 2
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

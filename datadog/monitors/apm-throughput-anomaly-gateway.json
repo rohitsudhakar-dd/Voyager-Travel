@@ -1,0 +1,32 @@
+{
+  "name": "[Voyager] voyager-gateway throughput anomaly",
+  "type": "query alert",
+  "query": "avg(last_4h):anomalies(sum:trace.fastify.request.hits{env:demo,service:voyager-gateway}.as_rate(), 'agile', 2, direction='both', interval=60, alert_window='last_30m', seasonality='hourly', count_default_zero='true') >= 1",
+  "message": "{{#is_alert}}Gateway request throughput has left its normal band for the last half hour. This monitor is deliberately two-sided: a 30% drop is as interesting as a spike, and usually more urgent.{{/is_alert}}\n\n**Decide which direction it is first, because the two mean opposite things.**\n\n**Throughput has fallen.** Traffic is not arriving. Nothing downstream will look broken, because the requests that would have broken were never made. Check, in order:\n1. Is the load generator running? A stopped k6 or Playwright container is the most common cause in this environment and is not an incident.\n2. Are the synthetic tests failing? *[Voyager] Checkout funnel* failing while every service metric is green points at the edge — Caddy, TLS, DNS — rather than at the application.\n3. Is the browser failing before it reaches us? *Voyager — Frontend Experience* will still show views and errors even when the API is unreachable.\n\n**Throughput has risen.** Either real demand, a retry storm, or load being turned up for a demo. A retry storm is the one to catch: it shows up as throughput climbing while a downstream service is slow or erroring, and it makes the original problem worse. Check whether a latency monitor was already alerting before this one.\n\n**Where to look.** *Voyager — Service Overview* → *Requests per second by service*, which shows whether the change is uniform across services or confined to one path.\n\n**Chaos flags relevant to this monitor.** No flag directly changes throughput — that is what makes a drop here a genuine signal rather than an artefact. What flags *can* do is suppress throughput indirectly by breaking a step earlier in the funnel: `gds_error_rate` and `gds_rate_limit_aggressive` stop searches completing, `frontend_js_error_rate` stops the browser making the next call. Scenarios **S4** and **S8** both produce that shape. Run `scripts/chaos.sh status`, and if the drop coincides with a load-generation change rather than a flag, the answer is in the load generator, not in Datadog.\n{{#is_recovery}}Gateway throughput is back inside its normal band.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:apm-throughput-anomaly-gateway",
+    "service:voyager-gateway",
+    "signal:throughput"
+  ],
+  "priority": 3,
+  "options": {
+    "thresholds": {
+      "critical": 1,
+      "critical_recovery": 0
+    },
+    "threshold_windows": {
+      "trigger_window": "last_30m",
+      "recovery_window": "last_15m"
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

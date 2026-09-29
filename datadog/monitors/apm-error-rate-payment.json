@@ -1,0 +1,28 @@
+{
+  "name": "[Voyager] voyager-payment error rate above 5%",
+  "type": "query alert",
+  "query": "sum(last_10m):100 * ( sum:trace.fastapi.request.errors{env:demo,service:voyager-payment}.as_count() / sum:trace.fastapi.request.hits{env:demo,service:voyager-payment}.as_count() ) > 5",
+  "message": "{{#is_alert}}{{value}}% of payment requests are failing at the transport level. These are broken authorisation attempts, not refused cards — the guest gets an error page rather than \"your card was declined\".{{/is_alert}}\n{{#is_warning}}Payment error rate is {{value}}%, past the {{warn_threshold}}% warning line.{{/is_warning}}\n\n**Errors are not declines, and the difference decides who owns this.** A decline is a correct business outcome the provider chose and is recorded as such; an error means the conversation with the provider broke and we do not know what happened. 05-FUNCTIONALITY.md § 11 keeps them on separate flags (`payment_error_rate` versus `payment_decline_rate`) precisely so this distinction can be demonstrated. *Voyager — Checkout Deep Dive* → *Authorised vs declined vs errored per minute* shows all three lines side by side; read it before escalating.\n\n**Likely cause.** The provider returning 5xx, timing out, or the call failing before it is made. Check *Provider latency p95 by operation* on the same dashboard: errors with high latency means the provider is overloaded, errors with normal latency means it is refusing fast.\n\n**Watch for the second-order effect.** Failed authorisations are retried, and retries hit the idempotency layer. Rising `voyager.payment.idempotency_replays` alongside this alert is the safety net doing its job — it is what stops a retry becoming a double charge. If replays are *not* rising while errors are, that is worth investigating on its own.\n\n**Chaos flag that reverses it.** `payment_error_rate` makes `mock-payments` return 500 — explicitly an error, not a decline. Scenario **S2** sets it to 0.30 along with `payment_latency_ms=3000`, `payment_decline_rate=0.25`, `payment_decline_mix=insufficient_funds` and `payment_webhook_delay_ms=15000`. Clear just this with `scripts/chaos.sh set payment_error_rate 0`, or unwind the brownout with `scripts/chaos.sh revert S2`.\n\nThis monitor is one half of the composite **[Voyager] Checkout degraded**, which only fires when payment errors and falling booking throughput happen together.\n{{#is_recovery}}Payment error rate is back under 5%. Reconcile anything left in `PENDING_PAYMENT` before closing.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:apm-error-rate-payment",
+    "service:voyager-payment",
+    "signal:errors"
+  ],
+  "priority": 1,
+  "options": {
+    "thresholds": {
+      "critical": 5,
+      "warning": 2
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "[Voyager] Booking success SLO — slow burn",
+  "type": "slo alert",
+  "query": "burn_rate(\"{{SLO_ID:booking-success-rate}}\").over(\"30d\").long_window(\"6h\").short_window(\"30m\") > 6",
+  "message": "{{#is_alert}}The booking success SLO has been burning error budget at six times the sustainable rate for the last six hours. Nothing is dramatically broken — this is the kind of loss that never trips a threshold monitor and quietly eats the month.{{/is_alert}}\n\n**Why this alert exists separately from the fast burn.** A burn rate of 6 sustained for six hours consumes 5% of a 30-day budget. It is far below anything a latency or error-rate monitor would notice, because the system is not failing; it is failing *slightly*, constantly. Left alone for a week it exhausts the budget without a single page. The fast-burn alert catches outages; this one catches attrition, and the two need different windows because a six-hour signal cannot be made to fire in five minutes without becoming noise.\n\n**Do not treat this as urgent, and do not ignore it.** Work through it during hours:\n1. *Voyager — Business Health* → *Booking failures by reason*, over the last day rather than the last hour. A slow burn usually has one reason that has been present the whole time at a modest rate.\n2. Compare against the same window a week ago. If the rate has been constant for weeks, the objective may simply be set tighter than the system's real capability — which is a conversation about the target, not a bug.\n3. *Voyager — Checkout Deep Dive* → *Decline codes* and *Payment errors by kind*. A small persistent share of one decline code is a common cause and is often not ours to fix.\n\n**Chaos flags that produce this shape.** Anything set to a low rate and left on, which is easy to do accidentally after a demo:\n- `payment_error_rate` or `payment_decline_rate` at a modest value — for example a forgotten `0.05` rather than S2's `0.30`.\n- `gds_error_rate` at 0.05, which is what scenario **S1** sets. A few failed searches per hundred do not break anything visibly, and some of those guests do not come back to book.\n- `email_failure_rate` and `kafka_poison_rate` do **not** affect this SLO: bookings still confirm, the notification is what fails. If this alert is firing, the loss is in the booking path itself.\n\n**First thing to check.** Run `scripts/chaos.sh status`. A slow burn with no obvious incident is very often a flag left on after a demo, and `make chaos-reset` is the fix. If nothing is set, this is a real and genuinely useful finding.\n{{#is_recovery}}Slow burn has stopped. Worth noting in the postmortem notebook what changed, since a slow burn that resolves without an obvious intervention tends to come back.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:slo-booking-success-slow-burn",
+    "service:voyager-booking",
+    "signal:slo",
+    "slo:booking-success-rate"
+  ],
+  "priority": 3,
+  "options": {
+    "thresholds": {
+      "critical": 6
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "renotify_interval": 0
+  }
+}

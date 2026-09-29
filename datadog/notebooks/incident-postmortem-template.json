@@ -1,0 +1,537 @@
+{
+  "data": {
+    "type": "notebooks",
+    "attributes": {
+      "name": "Voyager — Incident Postmortem Template",
+      "status": "published",
+      "time": {
+        "live_span": "1d"
+      },
+      "metadata": {
+        "type": "postmortem",
+        "is_template": true,
+        "take_snapshots": false
+      },
+      "cells": [
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "definition": {
+              "type": "markdown",
+              "text": "# Voyager — Incident Postmortem\n\n**Copy this notebook before filling it in.** Editing the template loses it for the next incident.\n\nThe first thing to do after copying is set the notebook's global time range to the incident window. Every graph below inherits it, so the whole document becomes fixed to the period under discussion rather than to whenever someone happens to open it.\n\n| | |\n|---|---|\n| **Incident** | |\n| **Severity** | |\n| **Declared by / at** | |\n| **Resolved at** | |\n| **Duration of customer impact** | |\n| **Authors** | |\n| **Status** | Draft / In review / Final |\n\n---\n\n## Summary\n\nThree or four sentences, written for someone who was not involved. What broke, who noticed, what the guests experienced, how long it lasted, and what fixed it. If a reader has to scroll to understand what happened, the summary is not finished.\n\n## Customer impact\n\nNumbers, not adjectives. Bookings not completed, revenue not taken, guests who saw an error, confirmation emails not sent. The graphs in the next section are here to be read off, and \"the checkout was degraded\" is not an impact statement.\n\n## What happened\n\n---"
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "definition": {
+              "type": "markdown",
+              "text": "## 1. Business impact\n\nStart here, and quote these numbers in the impact section above. Everything else in this document is in service of explaining this graph."
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "graph_size": "l",
+            "split_by": { "keys": [], "tags": [] },
+            "definition": {
+              "type": "timeseries",
+              "title": "Bookings per minute — created, confirmed, failed",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "created",
+                      "query": "sum:voyager.booking.created{env:demo}.as_rate()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "confirmed",
+                      "query": "sum:voyager.booking.confirmed{env:demo}.as_rate()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "failed",
+                      "query": "sum:voyager.booking.failed{env:demo}.as_rate()"
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "created * 60", "alias": "Created/min" },
+                    { "formula": "confirmed * 60", "alias": "Confirmed/min" },
+                    { "formula": "failed * 60", "alias": "Failed/min" }
+                  ],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "graph_size": "m",
+            "split_by": { "keys": [], "tags": [] },
+            "definition": {
+              "type": "timeseries",
+              "title": "Revenue booked per minute by product",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["sum", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "area",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "revenue",
+                      "query": "sum:voyager.booking.revenue_cents{env:demo} by {product}.as_rate()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "revenue * 60 / 100", "alias": "Revenue/min" }],
+                  "style": { "palette": "cool", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "graph_size": "m",
+            "split_by": { "keys": [], "tags": [] },
+            "definition": {
+              "type": "toplist",
+              "title": "Booking failures by reason",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "failures",
+                      "query": "sum:voyager.booking.failed{env:demo} by {failure_reason}",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "failures", "limit": { "count": 10, "order": "desc" } }]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "definition": {
+              "type": "markdown",
+              "text": "## 2. Timeline\n\nUse UTC and be specific to the minute. Include the moment the first signal existed, not just the moment a human saw it — the gap between those two is usually the most actionable finding in the whole document.\n\n| Time (UTC) | Event | Source |\n|---|---|---|\n| | First measurable deviation | Monitor / graph |\n| | First alert fired | Monitor name |\n| | First human acknowledged | |\n| | Incident declared | |\n| | Root cause identified | |\n| | Mitigation applied | |\n| | Customer impact ended | |\n| | Incident resolved | |\n\n**Detection gap:** _first deviation → first alert_\n\n**Response gap:** _first alert → human acknowledged_\n\nIf the detection gap is large, the finding is about monitoring coverage. If the response gap is large, the finding is about routing and priority. These are different problems with different fixes, and conflating them produces action items that help with neither."
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "definition": {
+              "type": "markdown",
+              "text": "## 3. Which services were involved\n\nAdjust the service filters below to the services in question. Latency and error rate together are usually enough to establish the direction of causation: the service that degraded *first* is rarely the one people noticed first.\n\nRemember that trace metrics are namespaced by entry-span name, so the query depends on the runtime — `trace.fastify.request` for the Node services, `trace.fastapi.request` for the Python services, `trace.http.request` for the Go services. See 02-TECH-STACK.md § 5.2."
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "graph_size": "l",
+            "split_by": { "keys": [], "tags": [] },
+            "definition": {
+              "type": "timeseries",
+              "title": "p95 latency by service — all three runtimes",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": false },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "node",
+                      "query": "p95:trace.fastify.request{env:demo} by {service}"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "python",
+                      "query": "p95:trace.fastapi.request{env:demo} by {service}"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "go",
+                      "query": "p95:trace.http.request{env:demo} by {service}"
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "node * 1000", "alias": "p95 (ms)" },
+                    { "formula": "python * 1000", "alias": "p95 (ms)" },
+                    { "formula": "go * 1000", "alias": "p95 (ms)" }
+                  ],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "graph_size": "l",
+            "split_by": { "keys": [], "tags": [] },
+            "definition": {
+              "type": "timeseries",
+              "title": "Error rate by service (%) — all three runtimes",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "node_err",
+                      "query": "sum:trace.fastify.request.errors{env:demo} by {service}.as_count()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "node_hits",
+                      "query": "sum:trace.fastify.request.hits{env:demo} by {service}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "100 * node_err / node_hits", "alias": "Node error rate %" }],
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                },
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "py_err",
+                      "query": "sum:trace.fastapi.request.errors{env:demo} by {service}.as_count()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "py_hits",
+                      "query": "sum:trace.fastapi.request.hits{env:demo} by {service}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "100 * py_err / py_hits", "alias": "Python error rate %" }],
+                  "style": { "palette": "orange", "line_type": "solid", "line_width": "normal" }
+                },
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "go_err",
+                      "query": "sum:trace.http.request.errors{env:demo} by {service}.as_count()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "go_hits",
+                      "query": "sum:trace.http.request.hits{env:demo} by {service}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "100 * go_err / go_hits", "alias": "Go error rate %" }],
+                  "style": { "palette": "purple", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "definition": {
+              "type": "markdown",
+              "text": "## 4. Was it us, or was it upstream?\n\nThis is the question that decides whether the action items are engineering work or vendor management. Partial results deserve particular attention: they are a *correct, degraded* answer, they return HTTP 200, and they appear in no error-rate graph anywhere. A search that quietly stopped covering one provider is invisible unless you look here."
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "graph_size": "m",
+            "split_by": { "keys": [], "tags": [] },
+            "definition": {
+              "type": "timeseries",
+              "title": "GDS provider latency p95 by provider (ms)",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": false },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "provider_p95",
+                      "query": "p95:voyager.search.provider_latency{env:demo} by {provider}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "provider_p95" }],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "graph_size": "m",
+            "split_by": { "keys": [], "tags": [] },
+            "definition": {
+              "type": "timeseries",
+              "title": "Payment outcomes per minute — authorised, declined, errored",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "authorized",
+                      "query": "sum:voyager.payment.authorized{env:demo}.as_rate()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "declined",
+                      "query": "sum:voyager.payment.declined{env:demo}.as_rate()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "errors",
+                      "query": "sum:voyager.payment.errors{env:demo}.as_rate()"
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "authorized * 60", "alias": "Authorised/min" },
+                    { "formula": "declined * 60", "alias": "Declined/min" },
+                    { "formula": "errors * 60", "alias": "Errored/min" }
+                  ],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "graph_size": "s",
+            "split_by": { "keys": [], "tags": [] },
+            "definition": {
+              "type": "timeseries",
+              "title": "Searches returning partial results per second",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "bars",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "partial",
+                      "query": "sum:voyager.search.partial_results{env:demo}.as_rate()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "partial" }],
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "definition": {
+              "type": "markdown",
+              "text": "## 5. The data layer\n\nCache, database and queue. The queue is the one people forget, because a lagging consumer produces no errors and no slow requests — only guests who never receive the email they were promised."
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "graph_size": "m",
+            "split_by": { "keys": [], "tags": [] },
+            "definition": {
+              "type": "timeseries",
+              "title": "Search cache hit ratio (%)",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "value"],
+              "yaxis": { "include_zero": true, "max": "100" },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "hits",
+                      "query": "sum:voyager.search.requests{env:demo,cache_hit:true}.as_count()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "total",
+                      "query": "sum:voyager.search.requests{env:demo}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "100 * hits / total", "alias": "Hit ratio %" }],
+                  "style": { "palette": "cool", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "graph_size": "m",
+            "split_by": { "keys": [], "tags": [] },
+            "definition": {
+              "type": "timeseries",
+              "title": "Kafka consumer lag by group and topic",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "lag",
+                      "query": "sum:kafka.consumer_lag{env:demo} by {consumer_group,topic}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "lag" }],
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "graph_size": "m",
+            "split_by": { "keys": [], "tags": [] },
+            "definition": {
+              "type": "timeseries",
+              "title": "Postgres connection pool usage (%) and waiting queries",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "pct",
+                      "query": "max:postgresql.percent_usage_connections{env:demo}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "pct * 100", "alias": "Connections used %" }],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                },
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "on_right_yaxis": true,
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "waiting",
+                      "query": "max:postgresql.active_waiting_queries{env:demo}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "waiting", "alias": "Waiting queries (right axis)" }],
+                  "style": { "palette": "warm", "line_type": "dashed", "line_width": "thin" }
+                }
+              ],
+              "right_yaxis": { "include_zero": true }
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "definition": {
+              "type": "markdown",
+              "text": "## 6. What the logs said\n\nFilter to the incident window and the service you suspect. The `chaos.active_flags` facet from 05-FUNCTIONALITY.md § 12.1 is the first thing to check on any Voyager incident: if it is non-empty, someone was running a scenario, and the postmortem is about a demo rather than a fault. Say so explicitly in the summary if that is the case — a postmortem that quietly turns out to have been a rehearsal wastes everyone's second reading."
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "graph_size": "l",
+            "split_by": { "keys": [], "tags": [] },
+            "definition": {
+              "type": "log_stream",
+              "title": "Errors and warnings across all services",
+              "query": "env:demo status:(error OR warn)",
+              "indexes": [],
+              "columns": ["service", "@error.kind", "@booking.state", "@chaos.active_flags"],
+              "show_date_column": true,
+              "show_message_column": true,
+              "message_display": "expanded-md",
+              "sort": { "column": "time", "order": "desc" }
+            }
+          }
+        },
+        {
+          "type": "notebook_cells",
+          "attributes": {
+            "definition": {
+              "type": "markdown",
+              "text": "## 7. Error budget consequences\n\nAttach the SLO status for the incident window here, from the SLO page for each objective. Three objectives exist:\n\n- **Voyager — Booking success rate** — metric-based, 99.0% over 30 days. This is the one the burn-rate alerts watch.\n- **Voyager — Search p95 under 800 ms** — monitor-based, 99.0% over 7 days.\n- **Voyager — Checkout availability** — time-slice from the checkout browser synthetic, 99.0% over 30 days.\n\nRecord the budget **consumed by this incident**, not the remaining budget: the remaining figure changes every day and will be meaningless to anyone reading this in a month. If the incident consumed a large share, that is itself an action item — either the system needs work or the objective was never achievable.\n\n---\n\n## 8. Root cause\n\nThe mechanism, not the trigger. \"A chaos flag was set\" and \"the deploy went out\" are triggers; the root cause is why the system could not absorb them. Keep asking why until the answer is something that can be changed.\n\n## 9. What went well\n\nGenuinely — which signal caught it, which dashboard answered the question first, what was already in place that saved time. This section is how good monitoring gets kept rather than quietly deleted in the next cleanup.\n\n## 10. What did not\n\nWhere time was lost. Missing instrumentation, a monitor that did not exist, an alert that went to nobody, a dashboard that showed no data because a metric name was wrong. Be specific about the minutes lost; it is the only way action items get prioritised honestly.\n\n## 11. Action items\n\nEvery row needs a named owner and a date. A postmortem with unowned actions is a diary entry.\n\n| Action | Type | Owner | Due | Ticket |\n|---|---|---|---|---|\n| | Prevent / Detect / Mitigate / Process | | | |\n\n**Prevent** stops it happening. **Detect** shortens the detection gap from the timeline. **Mitigate** shortens the recovery. **Process** fixes how people responded. If every action item is \"Prevent\", the detection gap will be exactly the same next time something new breaks — and something new always does.\n\n## 12. Lessons for the demo\n\nVoyager-specific, and worth keeping. If this incident produced a better narrative than one of the ten scenarios in 01-PRD.md § 8, write down the flag combination that would reproduce it. If a dashboard widget was missing or misleading, say which one, because the fix belongs in `datadog/dashboards/` and will be lost otherwise."
+            }
+          }
+        }
+      ]
+    }
+  }
+}

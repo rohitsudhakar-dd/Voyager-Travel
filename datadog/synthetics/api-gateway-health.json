@@ -1,0 +1,72 @@
+{
+  "name": "[Voyager] Gateway health",
+  "type": "api",
+  "subtype": "http",
+  "status": "live",
+  "locations": ["aws:eu-west-1", "aws:eu-west-2", "aws:us-east-1"],
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:api-gateway-health",
+    "service:voyager-gateway",
+    "env:demo"
+  ],
+  "config": {
+    "request": {
+      "method": "GET",
+      "url": "https://{{PUBLIC_HOSTNAME}}/health",
+      "timeout": 10,
+      "follow_redirects": false,
+      "headers": {
+        "Accept": "application/json"
+      }
+    },
+    "assertions": [
+      {
+        "type": "statusCode",
+        "operator": "is",
+        "target": 200
+      },
+      {
+        "type": "responseTime",
+        "operator": "lessThan",
+        "target": 2000
+      },
+      {
+        "type": "body",
+        "operator": "validatesJSONPath",
+        "target": {
+          "jsonPath": "$.status",
+          "operator": "is",
+          "targetValue": "ok"
+        }
+      },
+      {
+        "type": "body",
+        "operator": "validatesJSONPath",
+        "target": {
+          "jsonPath": "$.service",
+          "operator": "is",
+          "targetValue": "voyager-gateway"
+        }
+      }
+    ]
+  },
+  "options": {
+    "tick_every": 60,
+    "min_failure_duration": 120,
+    "min_location_failed": 2,
+    "monitor_name": "[Voyager] Gateway health check failing",
+    "monitor_priority": 1,
+    "follow_redirects": false,
+    "retry": {
+      "count": 1,
+      "interval": 1000
+    },
+    "monitor_options": {
+      "renotify_interval": 30
+    }
+  },
+  "message": "The API gateway is not answering `GET /health` from at least two locations. Every browser request and every other synthetic test goes through this service, so treat a real failure here as the whole demo being down.\n\n**Read the failure detail before assuming an outage.** This test asserts three things and they fail for different reasons:\n- **Non-200 or a connection error** — the gateway process, the container, or the edge proxy in front of it. Start with `make ps` and `make logs s=api-gateway`.\n- **`$.service` is not `voyager-gateway`** — the request reached something else. In practice that means the edge is routing `/health` to the web UI and you are asserting against an HTML page. This is a routing bug, not an outage, and it is the most likely way this test fails the first time it is ever run.\n- **Response time over two seconds** — the process is alive but starved. The gateway's health handler does no I/O at all, so two seconds means CPU contention or event-loop blocking, not a slow dependency.\n\n**`/ready` is the deeper check and this is not it.** `GET /health` deliberately returns without touching Postgres or Redis, so it stays green when the data layer is broken. That is the correct design — a liveness probe that fails on a dependency outage causes cascading restarts — but it means this test passing tells you nothing about the database. Use `GET /ready`, or *Voyager — Data Layer*, for that.\n\n**Two locations are required to fail before this alerts**, with a two-minute minimum failure duration, because a single managed location having a bad minute is not a Voyager problem and paging on it trains people to ignore synthetics.\n\n**No chaos flag can cause this.** None of the 38 flags in 05-FUNCTIONALITY.md § 11 stops the gateway answering a health check; `service_error_rate` injects failures into request handling, not into the health endpoint, precisely so that this signal stays trustworthy while a scenario is running. If this test is failing, something is genuinely broken.\n\nRun `scripts/verify-gateway.sh` for a fuller local picture."
+}

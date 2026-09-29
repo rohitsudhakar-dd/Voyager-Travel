@@ -1,0 +1,29 @@
+{
+  "name": "[Voyager] voyager-search p95 latency above 800 ms",
+  "type": "query alert",
+  "query": "avg(last_10m):p95:trace.http.request{env:demo,service:voyager-search} > 0.8",
+  "message": "{{#is_alert}}Flight and hotel search is slow: p95 over the last ten minutes is {{value}} seconds against an 800 ms objective. Anyone on the results page is watching a spinner.{{/is_alert}}\n{{#is_warning}}Search p95 is drifting towards the objective ({{value}} seconds, warning at {{warn_threshold}}). Worth a look before it becomes an alert.{{/is_warning}}\n\n**This monitor defines an SLO.** The 7-day *Search p95 < 800 ms* SLO measures the proportion of time this monitor is **not** alerting, so every minute spent here is error budget spent. Do not widen the threshold to silence it.\n\n**Likely cause, in the order worth checking.**\n1. **Upstream GDS latency.** Search fans out to the four GDS providers; one slow provider drags the whole p95 because the fan-out waits. Open *Voyager — Service Overview* and look at *GDS provider latency p95 by provider* — if one series is far above the others, the time is not ours.\n2. **A cold cache.** Search results are cached in Redis. When the hit ratio falls, fan-out volume multiplies and the providers start rate-limiting. *Voyager — Data Layer* has *Search cache hit ratio*.\n3. **Pricing.** Every result set is priced. If `pricing.evaluate_fare_rules` is the stage that grew, the problem is in pricing-service, not search.\n\n**Where to look.** *Voyager — Checkout Deep Dive* → *Search and pricing stages — p95*. That widget splits the request into `search.cache_lookup`, `search.fanout`, `search.normalize_results` and the three pricing stages, so you can tell which one grew instead of guessing.\n\n**Chaos flags that produce this.**\n- `gds_latency_ms` (with `gds_latency_mode=p99_tail` for the intermittent version) and `gds_provider_down` — scenario **S1**. Reverse with `scripts/chaos.sh revert S1`.\n- `redis_disabled`, `cache_ttl_seconds=1` and `gds_rate_limit_aggressive` — scenario **S4**, the cache stampede. Reverse with `scripts/chaos.sh revert S4`.\n- `pricing_hot_path` — scenario **S6**, if the growth is in fare-rule evaluation. Reverse with `scripts/chaos.sh revert S6`.\n- `service_latency_ms` can also add latency to `voyager-search` directly; `scripts/chaos.sh status` will show it.\n\nIf you are not sure whether this is a demo or a real regression, run `scripts/chaos.sh status` first. `make chaos-reset` clears every flag and undoes its side effects.\n{{#is_recovery}}Search p95 is back under the objective. Check the SLO's error budget before declaring this closed — a short, deep excursion can still cost a meaningful slice of a 7-day budget.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:apm-latency-search-p95",
+    "service:voyager-search",
+    "signal:latency",
+    "slo:search-latency-p95"
+  ],
+  "priority": 2,
+  "options": {
+    "thresholds": {
+      "critical": 0.8,
+      "warning": 0.6
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

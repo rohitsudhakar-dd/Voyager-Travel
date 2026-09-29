@@ -194,6 +194,53 @@ For Kafka, `dd-trace` (Node), `dd-trace-go`, and `ddtrace` (Python) all inject c
 DD_DATA_STREAMS_ENABLED=true
 ```
 
+### 5.2 Entry-point span names
+
+Each tracer names the span it opens for an inbound HTTP request after the
+framework it instruments, not after the service. Voyager has three runtimes, so
+it has three entry-point span names, and every service inside a runtime shares one:
+
+| Runtime | Entry-point span | Services |
+|---|---|---|
+| Node — Fastify | `fastify.request` | `api-gateway`, `loyalty-service`, all four mocks |
+| Go — chi via `net/http` | `http.request` | `search-service`, `pricing-service` |
+| Python — FastAPI | `fastapi.request` | `booking-service`, `payment-service`, `notification-worker`, `ai-support-service` |
+
+This matters far more than it looks. Datadog derives trace metrics by namespacing
+them under the entry-point span name — `trace.fastify.request.hits`,
+`trace.fastapi.request.errors`, `p95:trace.http.request` — so every APM query in
+`datadog/` has to name the right one for the service it is asking about. Name the
+wrong one and the query is still valid and still returns nothing at all, which on
+a dashboard is indistinguishable from a service that has stopped receiving
+traffic. Phase 8 owns keeping this table true; Phase 12 reads it.
+
+Custom spans are named explicitly in code and listed in `03-EXECUTION-ORDER.md`
+Phase 8. They are not entry spans, so Datadog generates no trace metrics for
+them — a dashboard breaking checkout down by stage has to query the `spans` data
+source and divide `@duration` by 1,000,000 to get milliseconds.
+
+### 5.3 Tags on Datadog objects
+
+Monitors, SLOs and synthetic tests created from `datadog/` carry a fixed tag set.
+These tag the *configuration objects*, not the telemetry, and are separate from
+the span and metric tags of § 5.1 and `05-FUNCTIONALITY.md § 14`:
+
+| Tag | Values | Purpose |
+|---|---|---|
+| `project` | `voyager` | Distinguishes Voyager's objects from anything else in a shared org |
+| `team` | `demo` | Placeholder owner; there is no real on-call rotation |
+| `env` | `demo` | Matches `DD_ENV` |
+| `managed_by` | `voyager-datadog-config` | Marks the object as owned by a committed file, so nobody edits it in the UI and loses the change on the next apply |
+| `voyager_id` | the filename stem, e.g. `apm-latency-search-p95` | The idempotency key `datadog/apply.sh` matches on; one file, one object, forever |
+| `service` | a `DD_SERVICE` value | Which service the object is about |
+| `signal` | `latency`, `errors`, `throughput`, `database`, `queue`, `logs`, `integration`, `composite`, `slo` | What kind of signal it watches, so a monitor list can be filtered by question rather than by service |
+| `slo` | an SLO filename stem | Present on burn-rate alerts, naming the SLO whose budget they watch |
+| `composite_leg` | a composite monitor's filename stem | Marks a monitor that exists to feed a composite and is not meant to page on its own |
+| `scenario` | `S1`–`S10` | Present where a monitor is the intended alert for one of the chaos scenarios in `01-PRD.md § 8` |
+
+Dashboards and notebooks are absent from this table because neither API accepts
+tags, which is why `apply.sh` has to match those two on title instead.
+
 ---
 
 ## 6. Datadog Agent configuration
@@ -357,7 +404,11 @@ LOADGEN_API_ENABLED=true
 LOADGEN_API_VUS=15
 LOADGEN_BROWSER_ENABLED=true
 LOADGEN_BROWSER_CONCURRENCY=2
+GATEWAY_BASE_URL=http://api-gateway:4000   # where loadgen-api sends traffic; it never calls a service directly
+WEB_BASE_URL=http://web-ui:8080            # origin loadgen-browser opens, so RUM records the same one a person would
 ```
+
+`GATEWAY_BASE_URL` and `WEB_BASE_URL` follow the existing `<SERVICE>_BASE_URL` convention and exist because the two generators are the only containers that address the front door rather than a downstream service. On a deployed host `WEB_BASE_URL` should be the public HTTPS origin, since RUM and Session Replay behave differently over plain HTTP and a generator on the wrong scheme produces sessions that do not match the ones people create.
 
 ### 7.2 Per-service Datadog variables
 

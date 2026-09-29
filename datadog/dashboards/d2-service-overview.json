@@ -1,0 +1,627 @@
+{
+  "title": "Voyager — Service Overview",
+  "description": "D2 from 01-PRD.md § 7: the RED signals for all nine Voyager services plus the four mocks, the service map, and the container resources underneath them.\n\nThe request/error/latency widgets query APM trace metrics, which Datadog derives automatically from entry-point spans. The entry-point span name depends on the runtime, not on the service, which is why the RED section is split three ways: `fastify.request` for the Node services (gateway, loyalty, and the four mocks), `fastapi.request` for the Python services (booking, payment, notifications, ai-support), and `http.request` for the Go services (search, pricing). See 02-TECH-STACK.md § 5.2. Merging them into one widget is not possible — trace metrics are namespaced by span name — and guessing the wrong name yields an empty graph rather than an error.\n\n`voyager-notifications` deliberately has no HTTP latency widget: it is a Kafka consumer, so its work does not arrive as inbound requests. Its health lives on **Voyager — Data Layer**.",
+  "layout_type": "ordered",
+  "reflow_type": "auto",
+  "template_variables": [
+    {
+      "name": "env",
+      "prefix": "env",
+      "defaults": ["demo"]
+    },
+    {
+      "name": "service",
+      "prefix": "service",
+      "defaults": ["*"]
+    },
+    {
+      "name": "route",
+      "prefix": "resource_name",
+      "defaults": ["*"]
+    },
+    {
+      "name": "user_tier",
+      "prefix": "tier",
+      "defaults": ["*"]
+    }
+  ],
+  "widgets": [
+    {
+      "definition": {
+        "type": "note",
+        "content": "**Voyager — Service Overview.** Start at the service map, then use the RED section for the runtime that owns the suspect service.\n\n`$route` filters on the APM `resource_name` tag — the normalised route such as `POST /api/v1/bookings`. There is no combined origin→destination route tag anywhere in Voyager; that is a deliberate cardinality decision recorded in 05-FUNCTIONALITY.md § 14.",
+        "background_color": "gray",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "top",
+        "show_tick": false,
+        "tick_pos": "50%",
+        "tick_edge": "left",
+        "has_padding": true
+      }
+    },
+    {
+      "definition": {
+        "type": "service_map",
+        "title": "Service map — dependencies as traced",
+        "service": "voyager-gateway",
+        "filters": ["env:$env.value"]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Chaos state",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Chaos flags active",
+              "description": "Any non-zero value means the stack is deliberately broken. Check this before debugging anything: `make chaos-reset` clears every flag and undoes its side effects.",
+              "autoscale": false,
+              "precision": 0,
+              "text_align": "center",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "flags",
+                      "query": "max:voyager.chaos.flags_active{$env}",
+                      "aggregator": "last"
+                    }
+                  ],
+                  "formulas": [{ "formula": "flags" }],
+                  "conditional_formats": [
+                    {
+                      "comparator": ">",
+                      "value": 0,
+                      "palette": "black_on_light_yellow"
+                    },
+                    {
+                      "comparator": "<=",
+                      "value": 0,
+                      "palette": "white_on_green"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Deployed versions — p95 by DD_VERSION (search, pricing)",
+              "description": "Scoped to the Go entry span because scenario S6 pairs `version_override=v2-bad` with `pricing_hot_path=true`, and pricing is a Go service. A new series appearing here while the old one ends is the deployment story; the two lines sitting at different heights is the regression.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": false },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "p95_by_version",
+                      "query": "p95:trace.http.request{$env,$service,$route} by {service,version}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "p95_by_version * 1000", "alias": "p95 (ms)" }],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "RED — Node services (fastify.request): gateway, loyalty, mocks",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Requests per second by service",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "area",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "hits",
+                      "query": "sum:trace.fastify.request.hits{$env,$service,$route} by {service}.as_rate()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "hits" }],
+                  "style": { "palette": "cool", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "heatmap",
+              "title": "Error rate heatmap by service (%)",
+              "description": "A heatmap rather than a line chart because thirteen overlapping error-rate lines are unreadable, and the question being asked here is \"which service is dark right now\", not \"what exactly is the number\".",
+              "show_legend": false,
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "errors",
+                      "query": "sum:trace.fastify.request.errors{$env,$service,$route} by {service}.as_count()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "hits",
+                      "query": "sum:trace.fastify.request.hits{$env,$service,$route} by {service}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "100 * errors / hits", "alias": "Error rate %" }],
+                  "style": { "palette": "warm" }
+                }
+              ],
+              "yaxis": { "include_zero": true }
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Latency p50 / p95 / p99 by service (ms)",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": false },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "p50",
+                      "query": "p50:trace.fastify.request{$env,$service,$route} by {service}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "p50 * 1000", "alias": "p50" }],
+                  "style": { "palette": "grey", "line_type": "dotted", "line_width": "thin" }
+                },
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "p95",
+                      "query": "p95:trace.fastify.request{$env,$service,$route} by {service}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "p95 * 1000", "alias": "p95" }],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                },
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "p99",
+                      "query": "p99:trace.fastify.request{$env,$service,$route} by {service}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "p99 * 1000", "alias": "p99" }],
+                  "style": { "palette": "warm", "line_type": "dashed", "line_width": "thin" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "RED — Python services (fastapi.request): booking, payment, ai-support",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Requests per second by service",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "area",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "hits",
+                      "query": "sum:trace.fastapi.request.hits{$env,$service,$route} by {service}.as_rate()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "hits" }],
+                  "style": { "palette": "cool", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "heatmap",
+              "title": "Error rate heatmap by service (%)",
+              "show_legend": false,
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "errors",
+                      "query": "sum:trace.fastapi.request.errors{$env,$service,$route} by {service}.as_count()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "hits",
+                      "query": "sum:trace.fastapi.request.hits{$env,$service,$route} by {service}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "100 * errors / hits", "alias": "Error rate %" }],
+                  "style": { "palette": "warm" }
+                }
+              ],
+              "yaxis": { "include_zero": true }
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Latency p50 / p95 / p99 by service (ms)",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": false },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "p50",
+                      "query": "p50:trace.fastapi.request{$env,$service,$route} by {service}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "p50 * 1000", "alias": "p50" }],
+                  "style": { "palette": "grey", "line_type": "dotted", "line_width": "thin" }
+                },
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "p95",
+                      "query": "p95:trace.fastapi.request{$env,$service,$route} by {service}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "p95 * 1000", "alias": "p95" }],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                },
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "p99",
+                      "query": "p99:trace.fastapi.request{$env,$service,$route} by {service}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "p99 * 1000", "alias": "p99" }],
+                  "style": { "palette": "warm", "line_type": "dashed", "line_width": "thin" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "RED — Go services (http.request): search, pricing",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Requests per second by service",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "area",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "hits",
+                      "query": "sum:trace.http.request.hits{$env,$service,$route} by {service}.as_rate()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "hits" }],
+                  "style": { "palette": "cool", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "heatmap",
+              "title": "Error rate heatmap by service (%)",
+              "show_legend": false,
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "errors",
+                      "query": "sum:trace.http.request.errors{$env,$service,$route} by {service}.as_count()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "hits",
+                      "query": "sum:trace.http.request.hits{$env,$service,$route} by {service}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "100 * errors / hits", "alias": "Error rate %" }],
+                  "style": { "palette": "warm" }
+                }
+              ],
+              "yaxis": { "include_zero": true }
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Latency p50 / p95 / p99 by service (ms)",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": false },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "p50",
+                      "query": "p50:trace.http.request{$env,$service,$route} by {service}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "p50 * 1000", "alias": "p50" }],
+                  "style": { "palette": "grey", "line_type": "dotted", "line_width": "thin" }
+                },
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "p95",
+                      "query": "p95:trace.http.request{$env,$service,$route} by {service}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "p95 * 1000", "alias": "p95" }],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                },
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "p99",
+                      "query": "p99:trace.http.request{$env,$service,$route} by {service}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "p99 * 1000", "alias": "p99" }],
+                  "style": { "palette": "warm", "line_type": "dashed", "line_width": "thin" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Upstream dependencies",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "GDS provider latency p95 by provider (ms)",
+              "description": "Scenario S1 sets `gds_provider_down=TRVP`, so one series here goes flat or vanishes while the others stay healthy. That asymmetry is the whole point: the slowness is upstream, not ours.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": false },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "provider_p95",
+                      "query": "p95:voyager.search.provider_latency{$env} by {provider}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "provider_p95" }],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "GDS provider errors by provider and kind",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "provider_errors",
+                      "query": "sum:voyager.search.provider_errors{$env} by {provider,error_kind}",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "provider_errors", "limit": { "count": 10, "order": "desc" } }]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Searches returning partial results per second",
+              "description": "Partial results are a correct, degraded answer rather than an error, so they never show up in the error-rate widgets above. This is the only place the degradation is visible.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "bars",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "partial",
+                      "query": "sum:voyager.search.partial_results{$env}.as_rate()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "partial" }],
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Containers",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Container memory RSS by container",
+              "description": "Scenario S7 sets `booking_memory_leak=true`; the booking container's line climbs steadily over about twenty minutes and then drops vertically when the kernel OOM-kills it. The drop, not the climb, is what people notice first.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "rss",
+                      "query": "avg:container.memory.rss{$env} by {container_name}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "rss" }],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Container CPU usage by container",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "cpu",
+                      "query": "avg:container.cpu.usage{$env} by {container_name}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "cpu" }],
+                  "style": { "palette": "cool", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "OOM events by container",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "oom",
+                      "query": "sum:container.memory.oom_events{$env} by {container_name}",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "oom", "limit": { "count": 10, "order": "desc" } }]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

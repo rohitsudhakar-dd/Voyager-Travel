@@ -1,0 +1,48 @@
+{
+  "name": "Voyager — Checkout availability",
+  "type": "time_slice",
+  "description": "The proportion of five-minute slices over a 30-day rolling window in which every run of the [Voyager] Checkout funnel browser synthetic passed, against a 99.0% objective (01-PRD.md § 6.2).\n\nThis is the only SLO in Voyager measured from outside the system. The other two are built from the application's own telemetry, which means they cannot see a failure that stops requests arriving at all — a broken TLS certificate, a Caddy misconfiguration, a JavaScript bundle that will not parse. A browser test walking the real funnel does see those, and that is the whole reason this objective exists.\n\nWhy a time-slice rather than a monitor-based SLO: a time-slice SLO treats missing data as uptime, which is the correct behaviour for a synthetic that runs on a fixed schedule rather than continuously. A gap in test runs is not evidence that checkout was down.\n\nThe threshold is 1 with a >= comparator, so a slice counts as good only if the pass ratio is 1 — every run in that five minutes succeeded. With the test on a five-minute interval that is one run per slice, so a single failure costs one slice, which is 0.0116% of a 30-day window. The budget tolerates roughly 86 failed runs per month before the objective is missed.\n\nOne constant here could not be verified from Datadog's public documentation: the `status` tag value that marks a passing run of `synthetics.test_runs`. It is written as `status:0`. If that is wrong, the numerator will be empty and the SLO will read 0% — a loud, immediately obvious failure rather than a permanently green one, which is the safer way to be wrong. Confirm it against a real test run before trusting the number, and see datadog/README.md.",
+  "sli_specification": {
+    "time_slice": {
+      "query": {
+        "queries": [
+          {
+            "data_source": "metrics",
+            "name": "passed",
+            "query": "sum:synthetics.test_runs{public_id:{{SYNTHETICS_PUBLIC_ID:browser-checkout-funnel}},status:0}.as_count()"
+          },
+          {
+            "data_source": "metrics",
+            "name": "total",
+            "query": "sum:synthetics.test_runs{public_id:{{SYNTHETICS_PUBLIC_ID:browser-checkout-funnel}}}.as_count()"
+          }
+        ],
+        "formulas": [
+          {
+            "formula": "passed / total"
+          }
+        ]
+      },
+      "comparator": ">=",
+      "threshold": 1,
+      "query_interval_seconds": 300
+    }
+  },
+  "thresholds": [
+    {
+      "timeframe": "30d",
+      "target": 99.0,
+      "warning": 99.5
+    }
+  ],
+  "timeframe": "30d",
+  "target_threshold": 99.0,
+  "warning_threshold": 99.5,
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:checkout-availability",
+    "service:voyager-web"
+  ]
+}

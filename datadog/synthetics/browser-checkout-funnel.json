@@ -1,0 +1,427 @@
+{
+  "name": "[Voyager] Checkout funnel",
+  "type": "browser",
+  "status": "live",
+  "locations": ["aws:eu-west-1"],
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:browser-checkout-funnel",
+    "service:voyager-web",
+    "env:demo"
+  ],
+  "config": {
+    "assertions": [],
+    "request": {
+      "method": "GET",
+      "url": "https://{{PUBLIC_HOSTNAME}}/"
+    },
+    "variables": []
+  },
+  "steps": [
+    {
+      "name": "Choose the flights tab",
+      "type": "click",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='search-tab-flights']" }]
+          }
+        }
+      }
+    },
+    {
+      "name": "Type the origin airport",
+      "type": "typeText",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='search-origin']" }]
+          }
+        },
+        "value": "LHR",
+        "delay": 50
+      }
+    },
+    {
+      "name": "Pick the first origin suggestion",
+      "type": "click",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='combobox-option']" }]
+          }
+        }
+      }
+    },
+    {
+      "name": "Type the destination airport",
+      "type": "typeText",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='search-destination']" }]
+          }
+        },
+        "value": "JFK",
+        "delay": 50
+      }
+    },
+    {
+      "name": "Pick the first destination suggestion",
+      "type": "click",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='combobox-option']" }]
+          }
+        }
+      }
+    },
+    {
+      "name": "Submit the flight search",
+      "type": "click",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='search-submit']" }]
+          }
+        }
+      }
+    },
+    {
+      "name": "Results are on the page",
+      "type": "assertElementPresent",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 60,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='flight-result-row']" }]
+          }
+        }
+      }
+    },
+    {
+      "name": "Select the first result",
+      "type": "click",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='flight-result-select']" }]
+          }
+        }
+      }
+    },
+    {
+      "name": "We reached the checkout review step",
+      "type": "assertCurrentUrl",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 60,
+      "params": {
+        "check": "contains",
+        "value": "/review"
+      }
+    },
+    {
+      "name": "Continue past the review step",
+      "type": "click",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='review-continue']" }]
+          }
+        }
+      }
+    },
+    {
+      "name": "Passenger first name",
+      "type": "typeText",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='passenger-0-first-name']" }]
+          }
+        },
+        "value": "Synthetic",
+        "delay": 25
+      }
+    },
+    {
+      "name": "Passenger last name",
+      "type": "typeText",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='passenger-0-last-name']" }]
+          }
+        },
+        "value": "Traveller",
+        "delay": 25
+      }
+    },
+    {
+      "name": "Passenger date of birth",
+      "type": "typeText",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='passenger-0-dob']" }]
+          }
+        },
+        "value": "1988-03-14",
+        "delay": 25
+      }
+    },
+    {
+      "name": "Passenger nationality",
+      "type": "typeText",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='passenger-0-nationality']" }]
+          }
+        },
+        "value": "GB",
+        "delay": 25
+      }
+    },
+    {
+      "name": "Contact email",
+      "type": "typeText",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='contact-email']" }]
+          }
+        },
+        "value": "synthetic@loadgen.voyager.demo",
+        "delay": 25
+      }
+    },
+    {
+      "name": "Contact phone",
+      "type": "typeText",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='contact-phone']" }]
+          }
+        },
+        "value": "+447700900999",
+        "delay": 25
+      }
+    },
+    {
+      "name": "Continue to payment",
+      "type": "click",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='passengers-continue']" }]
+          }
+        }
+      }
+    },
+    {
+      "name": "Cardholder name",
+      "type": "typeText",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='card-holder']" }]
+          }
+        },
+        "value": "Synthetic Traveller",
+        "delay": 25
+      }
+    },
+    {
+      "name": "Card number",
+      "type": "typeText",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='card-number']" }]
+          }
+        },
+        "value": "4242 4242 4242 4242",
+        "delay": 25
+      }
+    },
+    {
+      "name": "Card expiry",
+      "type": "typeText",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='card-expiry']" }]
+          }
+        },
+        "value": "11 / 30",
+        "delay": 25
+      }
+    },
+    {
+      "name": "Card security code",
+      "type": "typeText",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='card-cvc']" }]
+          }
+        },
+        "value": "123",
+        "delay": 25
+      }
+    },
+    {
+      "name": "Submit the payment",
+      "type": "click",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='payment-submit']" }]
+          }
+        }
+      }
+    },
+    {
+      "name": "The confirmation page rendered",
+      "type": "assertElementPresent",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 60,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='confirmation']" }]
+          }
+        }
+      }
+    },
+    {
+      "name": "A six-character PNR was issued",
+      "type": "assertElementContent",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 60,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='confirmation-pnr-value']" }]
+          }
+        },
+        "check": "matches",
+        "value": "^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$"
+      }
+    }
+  ],
+  "options": {
+    "tick_every": 300,
+    "device_ids": ["chrome.laptop_large"],
+    "min_failure_duration": 0,
+    "min_location_failed": 1,
+    "monitor_name": "[Voyager] Checkout funnel browser test failing",
+    "monitor_priority": 1,
+    "noScreenshot": false,
+    "initialNavigationTimeout": 60,
+    "retry": {
+      "count": 1,
+      "interval": 10000
+    },
+    "rumSettings": {
+      "isEnabled": false
+    },
+    "monitor_options": {
+      "renotify_interval": 30
+    }
+  },
+  "message": "A real browser cannot complete a booking on Voyager. This test drives the actual UI from the home page to a six-character PNR on the confirmation screen, so a failure means the funnel is broken for everyone, not just for one API client.\n\n**This test defines an SLO.** *Voyager — Checkout availability* is a time-slice SLO built from this test's pass rate over a 30-day window. It is the only Voyager objective measured from outside the system, which makes it the one that catches TLS expiry, edge-proxy misconfiguration and a JavaScript bundle that will not parse — none of which produce a single unhealthy metric inside the stack.\n\n**Read which step failed; the sequence is the diagnosis.**\n- **Origin or destination suggestion not found** — the airport autocomplete is broken, which means `GET /ref/airports` or its Redis cache. It also fails if the suggestion list renders but the debounce has not elapsed, so check the screenshot before blaming the API.\n- **Results are on the page** — search returned nothing or timed out in the browser. Cross-check the *[Voyager] Flight search API latency and results* test: if that one is passing, the problem is in the front end, not in search.\n- **We reached the checkout review step** — the hold failed, so the app never navigated. This is where `hold_lock_contention` and inventory scarcity land.\n- **Continue to payment** — passenger validation rejected the form. The values here satisfy `passengersRequestSchema` in `packages/shared-schemas`; if that schema gained a required field, this step is the first thing to break.\n- **The confirmation page rendered** — the payment was refused or the confirmation never arrived. A decline shows `payment-declined` on the payment step rather than an error, and this test treats that as a failure on purpose.\n- **A six-character PNR was issued** — the booking confirmed but no reference was issued. Rare, and worth a real investigation: the guest has paid and has nothing to show for it.\n\n**Chaos flags that make this test fail.** Almost any of them, which is what makes it a good availability signal, but the ones worth naming:\n- `payment_decline_rate` and `payment_error_rate` — scenario **S2**. At S2's 25% decline rate this test fails roughly one run in four.\n- `gds_error_rate`, `gds_rate_limit_aggressive`, `redis_disabled`, `cache_ttl_seconds=1` — scenario **S4**; search stops returning results.\n- `frontend_blocking_js` and `frontend_heavy_assets` — scenario **S8**. These usually make the test *slow* rather than failing, and pushing them far enough will exhaust a step timeout. If this test is failing on timeouts while every backend metric is green, S8 is the first thing to check.\n- `hold_lock_contention`, `db_lock_storm`, `db_pool_starvation` — scenario **S10**.\n- Reverse with `scripts/chaos.sh revert S2|S4|S8|S10`, or clear everything with `make chaos-reset`.\n\n**One retry is configured**, ten seconds apart. A browser test walking twenty-four steps through a real UI has genuine flakiness, and an SLO built on an unretried browser test measures the test as much as the system. More than one retry would start hiding the intermittent failures this is meant to catch.\n\n**RUM collection is off for this test.** Enabling it would mix synthetic sessions into the RUM data that *Voyager — Frontend Experience* and the conversion funnel are built from, and a robot that never abandons a cart would quietly flatter every funnel rate on that dashboard.\n\n**This test writes real data** — a confirmed booking every five minutes, with a contact address on `loadgen.voyager.demo` so it can be identified as synthetic later, following the convention in 05-FUNCTIONALITY.md § 2.8.1."
+}

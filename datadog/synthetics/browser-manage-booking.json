@@ -1,0 +1,174 @@
+{
+  "name": "[Voyager] Manage booking lookup",
+  "type": "browser",
+  "status": "paused",
+  "locations": ["aws:eu-west-1"],
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:browser-manage-booking",
+    "service:voyager-web",
+    "env:demo"
+  ],
+  "config": {
+    "assertions": [],
+    "request": {
+      "method": "GET",
+      "url": "https://{{PUBLIC_HOSTNAME}}/manage"
+    },
+    "configVariables": [
+      {
+        "type": "text",
+        "name": "MANAGE_PNR",
+        "pattern": "REPLACE_WITH_SEEDED_PNR",
+        "example": "K8M2QR",
+        "secure": false
+      },
+      {
+        "type": "text",
+        "name": "MANAGE_SURNAME",
+        "pattern": "REPLACE_WITH_SEEDED_SURNAME",
+        "example": "Okonkwo",
+        "secure": false
+      }
+    ],
+    "variables": []
+  },
+  "steps": [
+    {
+      "name": "Enter the booking reference",
+      "type": "typeText",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='lookup-pnr']" }]
+          }
+        },
+        "value": "{{ MANAGE_PNR }}",
+        "delay": 25
+      }
+    },
+    {
+      "name": "Enter the surname on the booking",
+      "type": "typeText",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='lookup-surname']" }]
+          }
+        },
+        "value": "{{ MANAGE_SURNAME }}",
+        "delay": 25
+      }
+    },
+    {
+      "name": "Look up the booking",
+      "type": "click",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 30,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='lookup-submit']" }]
+          }
+        }
+      }
+    },
+    {
+      "name": "The lookup did not error",
+      "type": "assertElementPresent",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 45,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='manage-pnr-value']" }]
+          }
+        }
+      }
+    },
+    {
+      "name": "The reference shown matches the one we searched for",
+      "type": "assertElementContent",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 45,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='manage-pnr-value']" }]
+          }
+        },
+        "check": "contains",
+        "value": "{{ MANAGE_PNR }}"
+      }
+    },
+    {
+      "name": "The booking is confirmed",
+      "type": "assertElementContent",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 45,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='booking-state']" }]
+          }
+        },
+        "check": "contains",
+        "value": "CONFIRMED"
+      }
+    },
+    {
+      "name": "The cancellation policy and its affordance are present",
+      "type": "assertElementPresent",
+      "allowFailure": false,
+      "isCritical": true,
+      "timeout": 45,
+      "params": {
+        "element": {
+          "userLocator": {
+            "failTestOnCannotLocate": true,
+            "values": [{ "type": "css", "value": "[data-testid='cancel-booking']" }]
+          }
+        }
+      }
+    }
+  ],
+  "options": {
+    "tick_every": 900,
+    "device_ids": ["chrome.laptop_large"],
+    "min_failure_duration": 0,
+    "min_location_failed": 1,
+    "monitor_name": "[Voyager] Manage booking lookup failing",
+    "monitor_priority": 2,
+    "noScreenshot": false,
+    "initialNavigationTimeout": 60,
+    "retry": {
+      "count": 1,
+      "interval": 10000
+    },
+    "rumSettings": {
+      "isEnabled": false
+    },
+    "monitor_options": {
+      "renotify_interval": 0
+    }
+  },
+  "message": "**This test ships paused and must be given real data before it is switched on.** It needs the booking reference and surname of a seeded, confirmed booking, supplied through the `MANAGE_PNR` and `MANAGE_SURNAME` config variables, which are committed holding obvious placeholders. Until those are replaced the test would fail for a data reason rather than a reliability one, and a synthetic that is red for a reason nobody intends to fix is worse than no synthetic at all. See datadog/README.md for how to find a suitable booking; `make seed` produces them deterministically, so one lookup is enough and the values survive a re-seed.\n\n**What it covers that nothing else does.** The guest lookup path in 05-FUNCTIONALITY.md § 2.5 — `GET /bookings?pnr=&lastName=` — takes no authentication and is the only way someone who booked without an account can find their itinerary again. It is also the only read-only journey among the five committed tests: every other one creates data. That makes it the test that can run against production-like data without changing it, and the one to reach for when the question is \"can existing customers still see their bookings\".\n\n**It fans out across three services.** `GET /bff/booking/{idOrPnr}` calls booking-service for the booking, payment-service for the payment status and loyalty-service for the accrual, so a failure here can come from any of the three. Two of those legitimately answer with null: a booking between HELD and payment has no payment record, and a freshly confirmed booking has no accrual until the Kafka consumer catches up. This test therefore asserts on the reference, the state and the cancellation affordance rather than on payment or loyalty content, because asserting on an asynchronous value is how a synthetic becomes flaky.\n\n**Read which step failed.**\n- **The lookup did not error** — the booking was not found. Either the seed was reloaded and the reference changed, or booking-service is failing. Check the *[Voyager] Full booking API journey* test: if it is passing, booking-service is fine and this is a data problem.\n- **The booking is confirmed** — the referenced booking changed state. If someone cancelled it during a demo, pick another reference; that is not a fault.\n- **The cancellation policy and its affordance are present** — the policy could not be computed. This is the genuine reliability failure in the list.\n\n**Chaos flags relevant here.** `db_drop_index=true` and `db_n_plus_one=true` (scenario **S3**) make booking reads slow enough to exhaust the step timeouts — that scenario targets `GET /bookings/mine`, but the same tables back this lookup. `db_pool_starvation` and `db_lock_storm` (scenario **S10**) do the same by a different route. `service_error_rate` can fail booking-service, payment-service or loyalty-service directly. Reverse with `scripts/chaos.sh revert S3` or `scripts/chaos.sh revert S10`; `make chaos-reset` clears everything and recreates the dropped index.\n\n**This test never cancels anything.** It stops at asserting that the cancellation affordance is present. Clicking through would destroy a seeded booking every fifteen minutes, and the seeded power users' booking history is the subject of scenario S3 — eroding it would break that demo silently, weeks later, with no obvious cause."
+}

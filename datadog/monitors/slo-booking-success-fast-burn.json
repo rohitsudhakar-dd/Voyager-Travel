@@ -1,0 +1,25 @@
+{
+  "name": "[Voyager] Booking success SLO — fast burn",
+  "type": "slo alert",
+  "query": "burn_rate(\"{{SLO_ID:booking-success-rate}}\").over(\"30d\").long_window(\"1h\").short_window(\"5m\") > 14.4",
+  "message": "{{#is_alert}}The booking success SLO is burning error budget 14.4 times faster than the 30-day budget allows. At this rate the entire month's budget is gone in roughly two days, and 2% of it goes in the next hour alone. This needs someone now.{{/is_alert}}\n\n**What 14.4 means.** A burn rate of 1 spends the budget exactly evenly across the window, finishing it precisely at the end of the 30 days. 14.4 is the rate at which 2% of a 30-day budget is consumed in one hour — the standard fast-burn multiplier. The alert requires both a 1-hour and a 5-minute window to exceed it, so a single bad minute does not page anyone while a sustained failure pages quickly.\n\n**This is a budget alert, not a diagnosis.** It tells you the loss is severe and ongoing; it does not tell you why. Go and find out:\n1. *Voyager — Business Health* → *Bookings per minute*. Confirmed falling while created holds means bookings are stalling; failed rising means they are being rejected. *Booking failures by reason* names the reason.\n2. Check whether **[Voyager] Checkout degraded** is also firing. If it is, payment is the cause and that monitor has the full runbook.\n3. *Voyager — Checkout Deep Dive* for the stage that broke.\n\n**Chaos flags that produce a fast burn.** Anything that makes bookings fail rather than merely slow down:\n- Scenario **S2** — `payment_error_rate=0.30` and `payment_decline_rate=0.25`. Reverse with `scripts/chaos.sh revert S2`.\n- Scenario **S4** — `redis_disabled`, `cache_ttl_seconds=1`, `gds_rate_limit_aggressive`, `gds_latency_ms=800`, `gds_error_rate=0.10`. Holds expire before checkout completes and bookings fail. Reverse with `scripts/chaos.sh revert S4`.\n- Scenario **S10** — `hold_lock_contention`, `db_lock_storm`, `db_pool_starvation`. Reverse with `scripts/chaos.sh revert S10`.\n\n`make chaos-reset` clears everything. Note that the budget already spent does **not** come back when the flag is turned off — that is the point of an error budget, and it is why a demo that runs S2 for twenty minutes leaves a visible mark on the SLO for the rest of the month.\n{{#is_recovery}}Fast burn has stopped. The slow-burn alert may still be active, and the budget consumed during this window is not recoverable — check the remaining budget on the SLO before deciding whether there is room for another demo this month.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:slo-booking-success-fast-burn",
+    "service:voyager-booking",
+    "signal:slo",
+    "slo:booking-success-rate"
+  ],
+  "priority": 1,
+  "options": {
+    "thresholds": {
+      "critical": 14.4
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "renotify_interval": 30
+  }
+}

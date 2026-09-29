@@ -1,0 +1,28 @@
+{
+  "name": "[Voyager] voyager-pricing error rate above 3%",
+  "type": "query alert",
+  "query": "sum(last_10m):100 * ( sum:trace.http.request.errors{env:demo,service:voyager-pricing}.as_count() / sum:trace.http.request.hits{env:demo,service:voyager-pricing}.as_count() ) > 3",
+  "message": "{{#is_alert}}{{value}}% of pricing calls are failing. An unpriced fare cannot be shown and cannot be sold, so search results and the checkout review step both break behind this.{{/is_alert}}\n{{#is_warning}}Pricing error rate is {{value}}%, past the {{warn_threshold}}% warning line.{{/is_warning}}\n\n**Why the threshold is lower here than elsewhere.** Pricing is pure computation with no network or database dependency on the hot path, so it has no legitimate source of transient failure. Where a few percent of errors in search might be an upstream provider having a bad minute, a few percent here means our own code is throwing, and it deserves attention sooner.\n\n**Likely cause.** Fare-rule evaluation hitting data it cannot handle, or the service being starved of CPU badly enough that requests time out rather than merely slow down. Check whether the pricing latency monitor is alerting too: latency plus errors points at saturation, errors alone points at a code path.\n\n**Where to look.** **Error Tracking** for `voyager-pricing` — one issue with a sharp spike is the answer, and the typed exception hierarchy in 05-FUNCTIONALITY.md § 13 keeps the grouping clean. Then *Voyager — Checkout Deep Dive* → *Search and pricing stages* to see which of `pricing.load_rules`, `pricing.evaluate_fare_rules` or `pricing.apply_taxes` the failures sit in.\n\n**Chaos flag that reverses it.** `service_error_rate` is the only flag that injects failures into `voyager-pricing`; it takes a service→rate map, so clear it with `scripts/chaos.sh set service_error_rate {}` or `make chaos-reset`. Note that `pricing_hot_path=true` makes pricing *slow* but not wrong — by design, no chaos flag is allowed to produce an incorrect business result, so if fares are being computed incorrectly, that is a genuine bug and not a toggle.\n{{#is_recovery}}Pricing error rate is back under 3%.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:apm-error-rate-pricing",
+    "service:voyager-pricing",
+    "signal:errors"
+  ],
+  "priority": 2,
+  "options": {
+    "thresholds": {
+      "critical": 3,
+      "warning": 1
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

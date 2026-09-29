@@ -1,0 +1,27 @@
+{
+  "name": "[Voyager] Redis evicting keys",
+  "type": "query alert",
+  "query": "sum(last_15m):clamp_min(diff(avg:redis.keys.evicted{env:demo}), 0) > 500",
+  "message": "{{#is_alert}}Redis has evicted {{value}} keys in the last fifteen minutes. It is out of memory and is discarding cached data to make room, which means search results that should have been cache hits are going back to the GDS providers instead.{{/is_alert}}\n{{#is_warning}}Redis evicted {{value}} keys in the last fifteen minutes, past the {{warn_threshold}} warning line.{{/is_warning}}\n\n**About the query.** `redis.keys.evicted` is submitted as a gauge holding Redis's cumulative `evicted_keys` counter, so a plain `> 0` threshold would latch on for ever after the first eviction and would swing wildly negative whenever the container restarted and the counter reset. `diff()` converts it back to a per-interval delta and `clamp_min` throws away the restart artefact; the sum over fifteen minutes is then the real number of evictions in that window. This is the single most common way an eviction monitor is built wrong.\n\n**Why evictions matter here more than they look.** Voyager caches search results, and a search that misses the cache fans out to four GDS providers. Evictions therefore multiply upstream call volume, which is what turns a memory problem into a rate-limiting problem and then into a search outage. It is the first link in scenario S4's cascade.\n\n**Where to look.** *Voyager — Data Layer*:\n1. *Memory used, clients and ops/s* — confirm memory is at the `maxmemory` ceiling.\n2. *Search cache hit ratio* — this is the impact. If it has fallen, the evictions are hitting keys that were being used.\n3. *Keys evicted per minute* — the same delta this monitor evaluates, so you can see the shape.\n\nThen *Voyager — Service Overview* → *GDS provider latency p95 by provider* and *GDS provider errors*, which is where the consequence lands.\n\n**Chaos flags that produce this.** `cache_ttl_seconds` is the relevant one: dropping it to 1 makes almost every entry expire before it can be reused, driving churn and memory pressure. Restore it with `scripts/chaos.sh set cache_ttl_seconds 120`. Scenario **S4** combines that with `redis_disabled=true`, `gds_rate_limit_aggressive=true`, `gds_latency_ms=800` and `gds_error_rate=0.10` — reverse the whole cascade with `scripts/chaos.sh revert S4`.\n\nNote that `redis_disabled=true` on its own will **not** trigger this monitor: it makes the application skip Redis entirely, so evictions stop while the cache hit ratio goes to zero. If cache hits have collapsed but this monitor is quiet, that is the flag you are looking at. `redis_latency_ms` likewise adds delay without evicting anything.\n\n**If no flag is set**, Redis genuinely needs more memory than `infra/redis/redis.conf` gives it, or something is writing keys without a TTL.\n{{#is_recovery}}Redis has stopped evicting keys. Check the cache hit ratio — it recovers more slowly than the eviction rate does, because the cache has to be repopulated.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:integration-redis-evictions",
+    "signal:integration"
+  ],
+  "priority": 3,
+  "options": {
+    "thresholds": {
+      "critical": 500,
+      "warning": 100
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

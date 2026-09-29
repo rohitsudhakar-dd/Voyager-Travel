@@ -1,0 +1,82 @@
+{
+  "name": "[Voyager] Flight search API latency and results",
+  "type": "api",
+  "subtype": "http",
+  "status": "live",
+  "locations": ["aws:eu-west-1", "aws:us-east-1"],
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:api-search-flights-latency",
+    "service:voyager-search",
+    "env:demo"
+  ],
+  "config": {
+    "request": {
+      "method": "POST",
+      "url": "https://{{PUBLIC_HOSTNAME}}/api/v1/search/flights",
+      "timeout": 15,
+      "headers": {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
+      "body": "{\"origin\":\"LHR\",\"destination\":\"JFK\",\"departDate\":\"{{ date(30d, YYYY-MM-DD) }}\",\"returnDate\":\"{{ date(37d, YYYY-MM-DD) }}\",\"passengers\":{\"adults\":1,\"children\":0,\"infants\":0},\"cabin\":\"economy\",\"sort\":\"price_asc\"}",
+      "bodyType": "application/json"
+    },
+    "assertions": [
+      {
+        "type": "statusCode",
+        "operator": "is",
+        "target": 200
+      },
+      {
+        "type": "responseTime",
+        "operator": "lessThan",
+        "target": 1500
+      },
+      {
+        "type": "body",
+        "operator": "validatesJSONPath",
+        "target": {
+          "jsonPath": "$.resultCount",
+          "operator": "moreThan",
+          "targetValue": 0
+        }
+      },
+      {
+        "type": "body",
+        "operator": "validatesJSONPath",
+        "target": {
+          "jsonPath": "$.results[0].id",
+          "operator": "matches",
+          "targetValue": "^fr_"
+        }
+      },
+      {
+        "type": "body",
+        "operator": "validatesJSONPath",
+        "target": {
+          "jsonPath": "$.providersResponded",
+          "operator": "moreThan",
+          "targetValue": 0
+        }
+      }
+    ]
+  },
+  "options": {
+    "tick_every": 300,
+    "min_failure_duration": 300,
+    "min_location_failed": 1,
+    "monitor_name": "[Voyager] Flight search API failing or slow",
+    "monitor_priority": 2,
+    "retry": {
+      "count": 1,
+      "interval": 5000
+    },
+    "monitor_options": {
+      "renotify_interval": 0
+    }
+  },
+  "message": "A real LHR→JFK round-trip search from outside the system is either failing, returning nothing, or taking longer than 1500 ms. Unlike the APM latency monitors, this measures what a client on the public internet experiences, TLS and edge proxy included.\n\n**Which assertion failed tells you what kind of problem this is.**\n- **`responseTime` over 1500 ms** — search is slow. Note that this is a single observed response time, not a percentile; 01-PRD.md § 6.2 describes this as a p95 assertion, which a single API test cannot express. The 7-day *Voyager — Search p95 under 800 ms* SLO is the percentile signal; this test is the outside-in one, and its threshold is looser on purpose because it includes network and TLS.\n- **`resultCount` is zero** — search succeeded and found nothing. That is much worse than an error, because nothing on the error dashboards will show it. Either every GDS provider returned empty, or the route has genuinely no inventory, or the seed data is missing.\n- **`results[0].id` does not start with `fr_`** — the response shape has changed. Someone altered the search contract in 05-FUNCTIONALITY.md § 2.3 without updating this test, or the request was answered by something that is not search-service.\n- **`providersResponded` is zero with a non-zero `resultCount`** — served entirely from cache while every provider was unreachable. Worth knowing, because it means the next cache expiry produces an outage.\n\n**Where to look.** *Voyager — Service Overview* → *GDS provider latency p95 by provider* and *GDS provider errors*. Then *Voyager — Data Layer* → *Search cache hit ratio*, since a cold cache is what turns provider latency into search latency.\n\n**Chaos flags that produce this.**\n- `gds_latency_ms` with `gds_latency_mode` — scenario **S1**. In `p99_tail` mode this test will fail intermittently rather than consistently, which is realistic and is why one retry is configured.\n- `gds_error_rate` and `gds_provider_down` — also **S1**. A single provider down reduces `providersResponded` without necessarily failing anything.\n- `redis_disabled`, `cache_ttl_seconds=1`, `gds_rate_limit_aggressive` — scenario **S4**, which is how this test goes from slow to failing.\n- Reverse with `scripts/chaos.sh revert S1` or `scripts/chaos.sh revert S4`; `make chaos-reset` clears everything.\n\n**The dates are generated, not hardcoded.** `departDate` and `returnDate` use Datadog's `date()` variable so they are always 30 and 37 days ahead. A fixed date would drift past the booking window in 05-FUNCTIONALITY.md § 2.3 and this test would start failing validation on an arbitrary future day, for reasons that would take an hour to find."
+}

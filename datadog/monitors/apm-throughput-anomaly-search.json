@@ -1,0 +1,32 @@
+{
+  "name": "[Voyager] voyager-search throughput anomaly",
+  "type": "query alert",
+  "query": "avg(last_4h):anomalies(sum:trace.http.request.hits{env:demo,service:voyager-search}.as_rate(), 'agile', 2, direction='both', interval=60, alert_window='last_30m', seasonality='hourly', count_default_zero='true') >= 1",
+  "message": "{{#is_alert}}Search throughput has been outside its normal band for half an hour. Search is the widest part of the funnel, so a change here moves everything downstream about a minute later.{{/is_alert}}\n\n**A rise is the more informative direction for this particular service.** Search volume is not purely demand-driven: each search that misses the cache fans out to four GDS providers, so upstream call volume can multiply while guest-facing search volume stays flat. That is the first half of a cache stampede, and it is visible here before anything is slow enough to alert.\n\n1. Check *Voyager — Data Layer* → *Search cache hit ratio*. A falling ratio with rising throughput is the stampede.\n2. Then *Voyager — Service Overview* → *GDS provider errors by provider and kind*. Once the providers start rate-limiting, the stampede becomes an outage.\n\n**A fall** means guests are not searching — look upstream at the gateway throughput anomaly monitor and at the funnel on *Voyager — Frontend Experience*, since the step before search is a click in the browser.\n\n**Chaos flags that produce the rise.** `cache_ttl_seconds=1` makes almost every search a miss, and `redis_disabled=true` removes the cache entirely. Both are part of scenario **S4**, which adds `gds_rate_limit_aggressive=true` so the stampede has something to collide with. Restore the cache with `scripts/chaos.sh set redis_disabled false` and `scripts/chaos.sh set cache_ttl_seconds 120`, or unwind the scenario with `scripts/chaos.sh revert S4`.\n{{#is_recovery}}Search throughput is back inside its normal band.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:apm-throughput-anomaly-search",
+    "service:voyager-search",
+    "signal:throughput"
+  ],
+  "priority": 3,
+  "options": {
+    "thresholds": {
+      "critical": 1,
+      "critical_recovery": 0
+    },
+    "threshold_windows": {
+      "trigger_window": "last_30m",
+      "recovery_window": "last_15m"
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

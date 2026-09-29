@@ -1,0 +1,388 @@
+{
+  "title": "Voyager — Business Health",
+  "description": "D1 from 01-PRD.md § 7. Everything here is a DogStatsD business metric from 05-FUNCTIONALITY.md § 14 or a RUM signal from 06-USER-FLOWS.md § 8, so the dashboard answers commercial questions without anyone having to read a trace.\n\nTemplate variables are applied only where the dimension genuinely exists: `$user_tier` resolves to the `tier` tag, which § 14 puts on the booking and loyalty metrics but not on the search metrics; `$origin` resolves to the `origin` tag, which only `voyager.search.requests` carries; `$service` and `$route` are here for consistency with the other five dashboards and are not wired into widgets whose metrics have no such dimension. Scoping a widget by a tag its metric never emits is the fastest way to build a dashboard that is permanently empty.",
+  "layout_type": "ordered",
+  "reflow_type": "auto",
+  "template_variables": [
+    {
+      "name": "env",
+      "prefix": "env",
+      "defaults": ["demo"]
+    },
+    {
+      "name": "service",
+      "prefix": "service",
+      "defaults": ["*"]
+    },
+    {
+      "name": "route",
+      "prefix": "resource_name",
+      "defaults": ["*"]
+    },
+    {
+      "name": "user_tier",
+      "prefix": "tier",
+      "defaults": ["*"]
+    },
+    {
+      "name": "origin",
+      "prefix": "origin",
+      "defaults": ["*"]
+    }
+  ],
+  "widgets": [
+    {
+      "definition": {
+        "type": "note",
+        "content": "**Voyager — Business Health.** Bookings, revenue, conversion and the three service level objectives.\n\nIf revenue dives here, go to **Voyager — Checkout Deep Dive** next: it separates a payment provider brownout (declines rising, authorisations flat) from an inventory problem (holds expiring).",
+        "background_color": "blue",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "top",
+        "show_tick": false,
+        "tick_pos": "50%",
+        "tick_edge": "left",
+        "has_padding": true
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Service level objectives",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "slo",
+              "title": "Booking success rate — 99.0% / 30d",
+              "view_type": "detail",
+              "view_mode": "overall",
+              "slo_id": "{{SLO_ID:booking-success-rate}}",
+              "show_error_budget": true,
+              "time_windows": ["30d"],
+              "global_time_target": "0"
+            }
+          },
+          {
+            "definition": {
+              "type": "slo",
+              "title": "Search p95 < 800 ms — 7d",
+              "view_type": "detail",
+              "view_mode": "overall",
+              "slo_id": "{{SLO_ID:search-latency-p95}}",
+              "show_error_budget": true,
+              "time_windows": ["7d"],
+              "global_time_target": "0"
+            }
+          },
+          {
+            "definition": {
+              "type": "slo",
+              "title": "Checkout availability — browser synthetic, 30d",
+              "view_type": "detail",
+              "view_mode": "overall",
+              "slo_id": "{{SLO_ID:checkout-availability}}",
+              "show_error_budget": true,
+              "time_windows": ["30d"],
+              "global_time_target": "0"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Volume and revenue",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Bookings confirmed (1h)",
+              "autoscale": true,
+              "precision": 0,
+              "text_align": "center",
+              "time": { "live_span": "1h" },
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "confirmed",
+                      "query": "sum:voyager.booking.confirmed{$env,$user_tier}.as_count()",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "confirmed" }]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Revenue booked (1h)",
+              "description": "`voyager.booking.revenue_cents` is a distribution in cents, so the widget sums it and divides by 100. Currency is a tag rather than a conversion: mixing currencies into one number would be a lie, so filter by `currency` on the trend widget below when it matters.",
+              "autoscale": true,
+              "precision": 0,
+              "custom_unit": "GBP",
+              "text_align": "center",
+              "time": { "live_span": "1h" },
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "revenue_cents",
+                      "query": "sum:voyager.booking.revenue_cents{$env,$user_tier}",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "revenue_cents / 100" }]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Bookings per minute — created, confirmed, failed",
+              "description": "The gap between created and confirmed is the checkout funnel's backend loss. Under scenario S2 the created line holds while confirmed collapses, because bookings stall at PENDING_PAYMENT rather than failing outright.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "created",
+                      "query": "sum:voyager.booking.created{$env,$user_tier}.as_rate()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "created * 60", "alias": "Created/min" }],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                },
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "confirmed",
+                      "query": "sum:voyager.booking.confirmed{$env,$user_tier}.as_rate()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "confirmed * 60", "alias": "Confirmed/min" }],
+                  "style": { "palette": "green", "line_type": "solid", "line_width": "normal" }
+                },
+                {
+                  "display_type": "bars",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "failed",
+                      "query": "sum:voyager.booking.failed{$env}.as_rate()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "failed * 60", "alias": "Failed/min" }],
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Revenue booked per minute by product",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "area",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "revenue",
+                      "query": "sum:voyager.booking.revenue_cents{$env,$user_tier} by {product}.as_rate()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "revenue * 60 / 100", "alias": "Revenue/min" }],
+                  "style": { "palette": "cool", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Conversion",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "funnel",
+              "title": "Checkout funnel — the eight steps from 06-USER-FLOWS.md § 8",
+              "requests": [
+                {
+                  "request_type": "funnel",
+                  "query": {
+                    "data_source": "rum",
+                    "query_string": "service:voyager-web env:$env.value",
+                    "steps": [
+                      { "facet": "@view.name", "value": "/home" },
+                      { "facet": "@action.name", "value": "Submit flight search" },
+                      { "facet": "@view.name", "value": "/results/flights" },
+                      { "facet": "@action.name", "value": "Select flight result" },
+                      { "facet": "@view.name", "value": "/checkout/review" },
+                      { "facet": "@action.name", "value": "Submit passenger details" },
+                      { "facet": "@action.name", "value": "Submit payment" },
+                      { "facet": "@action.name", "value": "Booking confirmed" }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Cart abandonment by checkout step",
+              "description": "`voyager.cart.abandoned` is emitted by the gateway (§ 14), not by the browser, so it survives an ad blocker eating the RUM SDK. Compare it against the funnel widget above: a divergence means the two are measuring different populations, usually because RUM is under-sampled.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "bars",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "abandoned",
+                      "query": "sum:voyager.cart.abandoned{$env} by {step}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "abandoned" }],
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Where the demand is",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Top routes searched",
+              "description": "Grouped by `origin` and `destination` at query time rather than by a pre-combined `route` tag: § 14 forbids the combined tag because it would be a quarter of a million tag values. Grouping two ~500-value tags in a query costs nothing at ingest.",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "searches",
+                      "query": "sum:voyager.search.requests{$env,$origin} by {origin,destination}",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "searches", "limit": { "count": 15, "order": "desc" } }]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Booking failures by reason",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "failures",
+                      "query": "sum:voyager.booking.failed{$env} by {failure_reason}",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "failures", "limit": { "count": 10, "order": "desc" } }]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Loyalty tier upgrades",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "upgrades",
+                      "query": "sum:voyager.loyalty.tier_upgrades{$env} by {from_tier,to_tier}",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "upgrades", "limit": { "count": 10, "order": "desc" } }]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Points accrued (1h)",
+              "autoscale": true,
+              "precision": 0,
+              "text_align": "center",
+              "time": { "live_span": "1h" },
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "points",
+                      "query": "sum:voyager.loyalty.points_accrued{$env,$user_tier}.as_count()",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "points" }]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

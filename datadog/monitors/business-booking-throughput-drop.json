@@ -1,0 +1,28 @@
+{
+  "name": "[Voyager] Confirmed bookings down more than 30%",
+  "type": "query alert",
+  "query": "pct_change(avg(last_5m),last_30m):sum:voyager.booking.confirmed{env:demo}.as_rate() < -30",
+  "message": "{{#is_alert}}Confirmed bookings are {{value}}% below where they were half an hour ago. Something between the search box and the confirmation page has stopped working, and it is costing revenue right now.{{/is_alert}}\n\n**Why this is a change monitor and not a threshold.** There is no correct absolute number of bookings per minute — it depends on how much load is running. What is always wrong is a sharp fall with no corresponding fall in traffic, and a percentage change catches that at any volume.\n\n**The first thing to rule out.** If overall traffic fell too, this is not a conversion problem; check **[Voyager] voyager-gateway throughput anomaly** and the load generators before looking at checkout at all.\n\n**If traffic is steady, work backwards along the funnel.** *Voyager — Business Health* → *Bookings per minute — created, confirmed, failed* tells you which of three stories it is:\n1. **Created flat, confirmed down, failed flat.** Bookings are stalling rather than failing — stuck in `PENDING_PAYMENT` waiting on an authorisation or a webhook that is not arriving. Slow payments and delayed webhooks both look like this.\n2. **Created flat, confirmed down, failed up.** Bookings are being actively rejected. Inventory, declines or a broken state transition.\n3. **Created down as well.** The problem is earlier — search or the browser — and checkout is innocent.\n\n**Then go to** *Voyager — Checkout Deep Dive* for the stage breakdown, and *Voyager — Frontend Experience* if the created line fell, since the step before a booking is a click.\n\n**Chaos flags that produce this.**\n- Scenario **S2** — `payment_latency_ms=3000`, `payment_error_rate=0.30`, `payment_decline_rate=0.25`, `payment_webhook_delay_ms=15000`. This is story 1 above. Reverse with `scripts/chaos.sh revert S2`.\n- Scenario **S4** — `redis_disabled`, `cache_ttl_seconds=1`, `gds_rate_limit_aggressive`, `gds_latency_ms=800`, `gds_error_rate=0.10`. Search degrades, holds expire before checkout finishes, bookings fail. Reverse with `scripts/chaos.sh revert S4`.\n- Scenario **S8** — the frontend-only regression. Backend perfectly healthy, guests abandoning anyway. Reverse with `scripts/chaos.sh revert S8`.\n\n**Why this monitor exists as a separate object.** It is the second leg of the composite **[Voyager] Checkout degraded**. On its own a booking dip has many innocent explanations, which is why it carries a low priority here and a high one there.\n{{#is_recovery}}Confirmed bookings are back within 30% of the earlier rate.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:business-booking-throughput-drop",
+    "service:voyager-booking",
+    "signal:throughput",
+    "composite_leg:checkout-degraded"
+  ],
+  "priority": 3,
+  "options": {
+    "thresholds": {
+      "critical": -30
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "[Voyager] voyager-search error rate above 5%",
+  "type": "query alert",
+  "query": "sum(last_10m):100 * ( sum:trace.http.request.errors{env:demo,service:voyager-search}.as_count() / sum:trace.http.request.hits{env:demo,service:voyager-search}.as_count() ) > 5",
+  "message": "{{#is_alert}}{{value}}% of search requests are failing outright. A guest who cannot search cannot book, so this is the top of the funnel closing.{{/is_alert}}\n{{#is_warning}}Search error rate is {{value}}%, past the {{warn_threshold}}% warning line.{{/is_warning}}\n\n**The important distinction.** Search is designed to degrade rather than fail: if one GDS provider is unavailable, it returns what the other three found and increments `voyager.search.partial_results`. Those requests are 200s and never appear here. So an alert on this monitor means the fan-out failed *entirely* — every provider gone, or the failure is in our own code after the fan-out.\n\n**Likely cause.**\n1. **All providers failing at once.** Usually rate limiting rather than outage: a cold cache multiplies fan-out volume, the providers start refusing, and search runs out of sources.\n2. **Redis.** If the cache layer is erroring rather than missing, cache lookups fail before the fan-out even starts.\n3. **Pricing.** Search calls pricing to price the results. A pricing failure becomes a search failure.\n\n**Where to look.** *Voyager — Service Overview* → *GDS provider errors by provider and kind* to see whether the failures are spread across providers or concentrated, and *Searches returning partial results per second* to see whether degradation preceded outright failure. Then **Error Tracking** for `voyager-search`.\n\n**Chaos flags that produce this.**\n- `gds_error_rate` — the direct cause; scenario **S1** sets it to 0.05. Reverse with `scripts/chaos.sh set gds_error_rate 0`.\n- `gds_rate_limit_aggressive=true` drops the provider rate limit to 10 requests per minute, which is what turns a cache problem into a search outage. It is part of scenario **S4** together with `redis_disabled` and `cache_ttl_seconds=1` — reverse the whole cascade with `scripts/chaos.sh revert S4`.\n- `service_error_rate` can inject 500s into `voyager-search` directly, with no upstream signal at all.\n{{#is_recovery}}Search error rate is back under 5%. Check whether `voyager.search.partial_results` is still elevated — search can be error-free and still be returning half an answer.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:apm-error-rate-search",
+    "service:voyager-search",
+    "signal:errors"
+  ],
+  "priority": 1,
+  "options": {
+    "thresholds": {
+      "critical": 5,
+      "warning": 2
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

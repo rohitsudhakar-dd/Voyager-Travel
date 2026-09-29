@@ -1,0 +1,28 @@
+{
+  "name": "[Voyager] voyager-booking error rate above 5%",
+  "type": "query alert",
+  "query": "sum(last_10m):100 * ( sum:trace.fastapi.request.errors{env:demo,service:voyager-booking}.as_count() / sum:trace.fastapi.request.hits{env:demo,service:voyager-booking}.as_count() ) > 5",
+  "message": "{{#is_alert}}{{value}}% of booking requests are failing. This is the service that owns the booking state machine, so failures here can leave records mid-transition as well as turning guests away.{{/is_alert}}\n{{#is_warning}}Booking error rate is {{value}}%, past the {{warn_threshold}}% warning line.{{/is_warning}}\n\n**Separate the two kinds of failure before doing anything else.** `InventoryUnavailableError` on a seat someone else just took is the system working correctly — the right answer to \"can I have this seat\" is sometimes no. A pool timeout or a lock timeout is the system failing. **Error Tracking** for `voyager-booking` splits them by exception type, and only the second kind justifies an incident.\n\n**Likely cause, if the failures are genuine.**\n1. **Connection pool exhaustion.** *Voyager — Data Layer* → *Connection pool usage*. A shrunken pool produces timeouts that look like database failure but never reach the database.\n2. **Lock timeouts.** Requests give up waiting for the advisory lock on inventory. *Voyager — Checkout Deep Dive* → *Advisory lock wait* will be in seconds rather than milliseconds.\n3. **A query that no longer finishes in time.** If the booking-list query lost its index, `GET /bookings/mine` starts timing out while everything else stays healthy — check *Rows read per execution* on *Voyager — Data Layer*.\n4. **Memory pressure.** A leaking process throws before it is killed. *Container memory RSS* on *Voyager — Service Overview* shows the climb.\n\n**Chaos flags that produce this.** `db_pool_starvation=true`, `db_lock_storm=true` and `hold_lock_contention=true` are scenario **S10** (`scripts/chaos.sh revert S10`). `db_drop_index=true` with `db_n_plus_one=true` is scenario **S3** (`scripts/chaos.sh revert S3`; the reset recreates the index). `booking_memory_leak=true` is scenario **S7**, and it is the one case that needs a single-service restart rather than a flag flip. `service_error_rate` can inject 500s directly. `make chaos-reset` clears all of them and undoes the side effects.\n{{#is_recovery}}Booking error rate is back under 5%. Before closing, confirm on *Voyager — Checkout Deep Dive* that no bookings are stranded in an intermediate state.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:apm-error-rate-booking",
+    "service:voyager-booking",
+    "signal:errors"
+  ],
+  "priority": 1,
+  "options": {
+    "thresholds": {
+      "critical": 5,
+      "warning": 2
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

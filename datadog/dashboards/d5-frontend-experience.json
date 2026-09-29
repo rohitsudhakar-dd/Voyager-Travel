@@ -1,0 +1,484 @@
+{
+  "title": "Voyager — Frontend Experience",
+  "description": "D5 from 01-PRD.md § 7: Core Web Vitals by view, the conversion funnel, JavaScript error rate, the five custom timings and a shortlist of sessions worth watching.\n\nEvery widget here reads RUM, which means the whole dashboard is empty until Phase 9 creates the RUM application and ships the SDK. That is expected, not a bug — but it also means the view names and action names below cannot be validated against live data, so they are transcribed from 06-USER-FLOWS.md § 2 and § 7 exactly. A view name that does not match is indistinguishable from a page nobody visited.\n\nCore Web Vitals are reported at the 75th percentile because that is the threshold Google's own definition uses; an average LCP hides the users who are actually suffering. LCP and INP are nanoseconds in RUM and are divided down to milliseconds; CLS is unitless.",
+  "layout_type": "ordered",
+  "reflow_type": "auto",
+  "template_variables": [
+    {
+      "name": "env",
+      "prefix": "env",
+      "defaults": ["demo"]
+    },
+    {
+      "name": "service",
+      "prefix": "service",
+      "defaults": ["voyager-web"]
+    },
+    {
+      "name": "route",
+      "prefix": "resource_name",
+      "defaults": ["*"]
+    },
+    {
+      "name": "user_tier",
+      "prefix": "tier",
+      "defaults": ["*"]
+    }
+  ],
+  "widgets": [
+    {
+      "definition": {
+        "type": "note",
+        "content": "**Voyager — Frontend Experience.** This is the dashboard for the complaint that the backend cannot explain.\n\nScenario S8 sets `frontend_heavy_assets`, `frontend_blocking_js`, `frontend_layout_shift` and `frontend_js_error_rate` and touches nothing server-side. Every widget on **Voyager — Service Overview** stays green while LCP, INP and CLS all degrade here. Revert with `scripts/chaos.sh revert S8`.\n\n`$user_tier` is not wired into these widgets: RUM carries the tier as `@usr.tier`, not as the `tier` metric tag the variable produces. Filter by tier from the RUM Explorer instead.",
+        "background_color": "blue",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "top",
+        "show_tick": false,
+        "tick_pos": "50%",
+        "tick_edge": "left",
+        "has_padding": true
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Core Web Vitals",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "LCP p75 — all views (ms)",
+              "autoscale": false,
+              "precision": 0,
+              "custom_unit": "ms",
+              "text_align": "center",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "rum",
+                      "name": "lcp",
+                      "search": { "query": "@type:view service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "pc75", "metric": "@view.largest_contentful_paint" },
+                      "group_by": []
+                    }
+                  ],
+                  "formulas": [{ "formula": "lcp / 1000000" }],
+                  "conditional_formats": [
+                    { "comparator": ">", "value": 4000, "palette": "white_on_red" },
+                    { "comparator": ">", "value": 2500, "palette": "white_on_yellow" },
+                    { "comparator": "<=", "value": 2500, "palette": "white_on_green" }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "INP p75 — all views (ms)",
+              "autoscale": false,
+              "precision": 0,
+              "custom_unit": "ms",
+              "text_align": "center",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "rum",
+                      "name": "inp",
+                      "search": { "query": "@type:view service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "pc75", "metric": "@view.interaction_to_next_paint" },
+                      "group_by": []
+                    }
+                  ],
+                  "formulas": [{ "formula": "inp / 1000000" }],
+                  "conditional_formats": [
+                    { "comparator": ">", "value": 500, "palette": "white_on_red" },
+                    { "comparator": ">", "value": 200, "palette": "white_on_yellow" },
+                    { "comparator": "<=", "value": 200, "palette": "white_on_green" }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "CLS p75 — all views",
+              "autoscale": false,
+              "precision": 3,
+              "text_align": "center",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "rum",
+                      "name": "cls",
+                      "search": { "query": "@type:view service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "pc75", "metric": "@view.cumulative_layout_shift" },
+                      "group_by": []
+                    }
+                  ],
+                  "formulas": [{ "formula": "cls" }],
+                  "conditional_formats": [
+                    { "comparator": ">", "value": 0.25, "palette": "white_on_red" },
+                    { "comparator": ">", "value": 0.1, "palette": "white_on_yellow" },
+                    { "comparator": "<=", "value": 0.1, "palette": "white_on_green" }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "LCP p75 by view (ms)",
+              "description": "`frontend_heavy_assets` serves large images everywhere and disables lazy loading, so the results views — the ones with a grid of photographs — move first and furthest. The ordering here is the diagnosis.",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "rum",
+                      "name": "lcp",
+                      "search": { "query": "@type:view service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "pc75", "metric": "@view.largest_contentful_paint" },
+                      "group_by": [
+                        {
+                          "facet": "@view.name",
+                          "limit": 16,
+                          "sort": { "aggregation": "pc75", "metric": "@view.largest_contentful_paint", "order": "desc" }
+                        }
+                      ]
+                    }
+                  ],
+                  "formulas": [{ "formula": "lcp / 1000000", "limit": { "count": 16, "order": "desc" } }]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "LCP, INP and CLS p75 over time",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "rum",
+                      "name": "lcp",
+                      "search": { "query": "@type:view service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "pc75", "metric": "@view.largest_contentful_paint" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "rum",
+                      "name": "inp",
+                      "search": { "query": "@type:view service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "pc75", "metric": "@view.interaction_to_next_paint" },
+                      "group_by": []
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "lcp / 1000000", "alias": "LCP p75 (ms)" },
+                    { "formula": "inp / 1000000", "alias": "INP p75 (ms)" }
+                  ],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                },
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "on_right_yaxis": true,
+                  "queries": [
+                    {
+                      "data_source": "rum",
+                      "name": "cls",
+                      "search": { "query": "@type:view service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "pc75", "metric": "@view.cumulative_layout_shift" },
+                      "group_by": []
+                    }
+                  ],
+                  "formulas": [{ "formula": "cls", "alias": "CLS p75 (right axis)" }],
+                  "style": { "palette": "warm", "line_type": "dashed", "line_width": "thin" }
+                }
+              ],
+              "right_yaxis": { "include_zero": true }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Conversion and actions",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "funnel",
+              "title": "Checkout funnel — target rates in 06-USER-FLOWS.md § 8",
+              "description": "The documented steady state is 72% search submission, 34% result selection and 17% end-to-end confirmation. Those numbers are the load generator's shape, so a large deviation means either chaos is on or Phase 11's mix has drifted.",
+              "requests": [
+                {
+                  "request_type": "funnel",
+                  "query": {
+                    "data_source": "rum",
+                    "query_string": "service:$service.value env:$env.value",
+                    "steps": [
+                      { "facet": "@view.name", "value": "/home" },
+                      { "facet": "@action.name", "value": "Submit flight search" },
+                      { "facet": "@view.name", "value": "/results/flights" },
+                      { "facet": "@action.name", "value": "Select flight result" },
+                      { "facet": "@view.name", "value": "/checkout/review" },
+                      { "facet": "@action.name", "value": "Submit passenger details" },
+                      { "facet": "@action.name", "value": "Submit payment" },
+                      { "facet": "@action.name", "value": "Booking confirmed" }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Actions by name",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "rum",
+                      "name": "actions",
+                      "search": { "query": "@type:action service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "count" },
+                      "group_by": [
+                        {
+                          "facet": "@action.name",
+                          "limit": 15,
+                          "sort": { "aggregation": "count", "order": "desc" }
+                        }
+                      ]
+                    }
+                  ],
+                  "formulas": [{ "formula": "actions", "limit": { "count": 15, "order": "desc" } }]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Views by name",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "rum",
+                      "name": "views",
+                      "search": { "query": "@type:view service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "count" },
+                      "group_by": [
+                        {
+                          "facet": "@view.name",
+                          "limit": 20,
+                          "sort": { "aggregation": "count", "order": "desc" }
+                        }
+                      ]
+                    }
+                  ],
+                  "formulas": [{ "formula": "views", "limit": { "count": 20, "order": "desc" } }]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Custom timings",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "The five custom timings — p75 (ms)",
+              "description": "These are the five timings enumerated in 06-USER-FLOWS.md § 7.1. They measure what the guest is waiting for, which rarely lines up with a single HTTP request: `time_to_first_result` spans the whole search fan-out, and `time_to_confirmation` spans the payment round trip and the state transition after it. Custom timings are reported in nanoseconds like the rest of RUM.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "rum",
+                      "name": "first_result",
+                      "search": { "query": "@type:view service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "pc75", "metric": "@view.custom_timings.time_to_first_result" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "rum",
+                      "name": "interactive_results",
+                      "search": { "query": "@type:view service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "pc75", "metric": "@view.custom_timings.time_to_interactive_results" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "rum",
+                      "name": "checkout_step",
+                      "search": { "query": "@type:view service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "pc75", "metric": "@view.custom_timings.checkout_step_duration" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "rum",
+                      "name": "confirmation",
+                      "search": { "query": "@type:view service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "pc75", "metric": "@view.custom_timings.time_to_confirmation" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "rum",
+                      "name": "support_first_token",
+                      "search": { "query": "@type:view service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "pc75", "metric": "@view.custom_timings.support_first_token" },
+                      "group_by": []
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "first_result / 1000000", "alias": "time_to_first_result" },
+                    { "formula": "interactive_results / 1000000", "alias": "time_to_interactive_results" },
+                    { "formula": "checkout_step / 1000000", "alias": "checkout_step_duration" },
+                    { "formula": "confirmation / 1000000", "alias": "time_to_confirmation" },
+                    { "formula": "support_first_token / 1000000", "alias": "support_first_token" }
+                  ],
+                  "style": { "palette": "cool", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Errors and sessions",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "JavaScript errors per 100 views",
+              "description": "Normalised per view rather than per minute so that the line does not move when the load generator changes its concurrency. `frontend_js_error_rate=0.03` should land this near three.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "rum",
+                      "name": "errors",
+                      "search": { "query": "@type:error service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "count" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "rum",
+                      "name": "views",
+                      "search": { "query": "@type:view service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "count" },
+                      "group_by": []
+                    }
+                  ],
+                  "formulas": [{ "formula": "100 * errors / views", "alias": "Errors per 100 views" }],
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Top JavaScript errors",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "rum",
+                      "name": "errors",
+                      "search": { "query": "@type:error service:$service.value env:$env.value" },
+                      "compute": { "aggregation": "count" },
+                      "group_by": [
+                        {
+                          "facet": "@error.message",
+                          "limit": 10,
+                          "sort": { "aggregation": "count", "order": "desc" }
+                        }
+                      ]
+                    }
+                  ],
+                  "formulas": [{ "formula": "errors", "limit": { "count": 10, "order": "desc" } }]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "list_stream",
+              "title": "Sessions worth replaying — errors and a recording",
+              "description": "Filtered to sessions that both hit an error and have a replay, because a session without a recording is a dead end in a demo and a session without an error is rarely interesting.",
+              "requests": [
+                {
+                  "response_format": "event_list",
+                  "query": {
+                    "data_source": "rum_stream",
+                    "query_string": "@type:session service:$service.value env:$env.value @session.has_replay:true @session.error.count:>0",
+                    "indexes": [],
+                    "sort": { "column": "timestamp", "order": "desc" }
+                  },
+                  "columns": [
+                    { "field": "timestamp", "width": "auto" },
+                    { "field": "@usr.tier", "width": "compact" },
+                    { "field": "@session.error.count", "width": "compact" },
+                    { "field": "@session.view.count", "width": "compact" },
+                    { "field": "@session.id", "width": "full" }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

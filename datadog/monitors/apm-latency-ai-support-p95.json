@@ -1,0 +1,28 @@
+{
+  "name": "[Voyager] voyager-ai-support p95 latency above 5 s",
+  "type": "query alert",
+  "query": "avg(last_10m):p95:trace.fastapi.request{env:demo,service:voyager-ai-support} > 5",
+  "message": "{{#is_alert}}The support assistant is taking {{value}} seconds at p95 to answer. Support chat is the one surface where people will wait, but five seconds before the first token is past the point where they assume it is broken and open a ticket instead.{{/is_alert}}\n{{#is_warning}}Support chat p95 is {{value}} seconds, past the {{warn_threshold}} second warning line.{{/is_warning}}\n\n**Read the right number.** Total request duration is a poor proxy for how the chat feels, because the response streams. What guests experience is time to first token, which RUM records as the `support_first_token` custom timing on *Voyager — Frontend Experience*. If that timing is healthy and this monitor is alerting, the answers are merely long, not late — check tokens per conversation before treating it as an outage.\n\n**Likely cause.**\n1. **The model itself.** *Voyager — AI Support* → *Request latency p50 / p95 / p99*. If p50 moved with p95, every call got slower, which points at the model rather than at one bad conversation.\n2. **Token bloat.** Verbose answers take longer to generate. *Tokens per conversation* rising while conversation volume is flat is the signature, and *Estimated cost per hour* will be climbing with it.\n3. **Tool-call retries.** If the model stops emitting tool calls, the service may retry or fall back, which costs a whole extra round trip. *Tool-call success rate* catches this.\n\n**Where to look.** *Voyager — AI Support*, then **LLM Observability** for the individual chains. The `workflow` → `llm` → `tool` span structure shows whether the time went into the model or into a tool call against booking-service.\n\n**Chaos flags that produce this.** `llm_latency_ms` adds time to first token in `mock-llm`; `llm_token_bloat=true` makes responses verbose. Scenario **S9** sets both alongside `llm_degrade_tools`, `llm_hallucinate` and `llm_error_rate=0.05`. Reverse with `scripts/chaos.sh revert S9`, or drop just the latency with `scripts/chaos.sh set llm_latency_ms 0`.\n\n**One thing this monitor cannot catch.** `llm_hallucinate=true` makes the assistant invent a plausible PNR and itinerary. It is fast, cheap, well-formed and completely wrong, and no latency or error monitor will ever see it. That is what the trace list at the bottom of *Voyager — AI Support* is for.\n{{#is_recovery}}Support chat p95 is back under threshold.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:apm-latency-ai-support-p95",
+    "service:voyager-ai-support",
+    "signal:latency"
+  ],
+  "priority": 3,
+  "options": {
+    "thresholds": {
+      "critical": 5,
+      "warning": 3
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

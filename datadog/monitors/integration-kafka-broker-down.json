@@ -1,0 +1,27 @@
+{
+  "name": "[Voyager] Kafka broker unreachable",
+  "type": "service check",
+  "query": "\"kafka.can_connect\".over(\"env:demo\").last(3).count_by_status()",
+  "message": "{{#is_alert}}The Agent cannot reach the Kafka broker over JMX. Voyager runs a single-broker KRaft cluster with no replication, so there is no second broker to fall back to — if this is real, the event backbone is down.{{/is_alert}}\n{{#is_warning}}One of the last three Kafka JMX checks failed. Usually transient; if it does not clear within a couple of minutes, treat it as an alert.{{/is_warning}}\n\n**What still works, and what does not.** Booking and payment write to Postgres first and publish afterwards, so the synchronous path keeps working: guests can still search, hold and pay. What stops is everything downstream of the event bus — confirmation emails, loyalty accrual, the payment webhook path back into booking. Those are asynchronous, so nobody sees an error page; the work just silently does not happen. Expect a burst of catching-up once the broker returns.\n\n**Check whether it is the broker or the check.** This service check comes from the JMX-based `kafka` integration on port 9999, which is a different path from the one the application uses on 9092. A JMX failure with healthy producers means the monitoring path broke, not the broker. Compare against *Voyager — Data Layer* → *Consumer lag by group and topic*: lag that is still being reported and still moving means Kafka is fine and this alert is about JMX.\n\n**Where to look.**\n1. `make ps` — is the `kafka` container up, and is its healthcheck passing? That healthcheck talks to 9092, so it answers the broker question directly.\n2. `make logs s=kafka` for the broker's own view.\n3. *Voyager — Data Layer* for lag and for the notification pipeline.\n\n**No chaos flag causes this.** None of the 38 flags in 05-FUNCTIONALITY.md § 11 stops the broker: `kafka_consumer_pause`, `kafka_slow_consumer_ms`, `kafka_producer_error_rate` and `kafka_poison_rate` all act on clients, deliberately, because a broker that is fine while a consumer is stalled is the more instructive failure and the harder one to diagnose. So if this monitor is alerting, it is not a demo — it is the container, the host, or the JMX port. That also makes it the honest answer to \"what would a real infrastructure alert look like\" in a stack where almost everything else is a toggle.\n{{#is_recovery}}The Agent can reach the Kafka broker again. Watch consumer lag for the next few minutes — the backlog that built up while the broker was unreachable has to drain.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:integration-kafka-broker-down",
+    "signal:integration"
+  ],
+  "priority": 1,
+  "options": {
+    "thresholds": {
+      "critical": 2,
+      "warning": 1,
+      "ok": 1
+    },
+    "notify_audit": false,
+    "notify_no_data": true,
+    "no_data_timeframe": 10,
+    "include_tags": true,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

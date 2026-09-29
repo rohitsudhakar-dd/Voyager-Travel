@@ -1,0 +1,231 @@
+{
+  "name": "[Voyager] Full booking API journey",
+  "type": "api",
+  "subtype": "multi",
+  "status": "live",
+  "locations": ["aws:eu-west-1"],
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:api-multistep-booking",
+    "service:voyager-booking",
+    "env:demo"
+  ],
+  "config": {
+    "assertions": [],
+    "steps": [
+      {
+        "name": "Search flights",
+        "subtype": "http",
+        "allowFailure": false,
+        "isCritical": true,
+        "request": {
+          "method": "POST",
+          "url": "https://{{PUBLIC_HOSTNAME}}/api/v1/search/flights",
+          "timeout": 20,
+          "headers": {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+          },
+          "body": "{\"origin\":\"LHR\",\"destination\":\"CDG\",\"departDate\":\"{{ date(30d, YYYY-MM-DD) }}\",\"passengers\":{\"adults\":1,\"children\":0,\"infants\":0},\"cabin\":\"economy\",\"sort\":\"price_asc\"}",
+          "bodyType": "application/json"
+        },
+        "assertions": [
+          { "type": "statusCode", "operator": "is", "target": 200 },
+          {
+            "type": "body",
+            "operator": "validatesJSONPath",
+            "target": { "jsonPath": "$.resultCount", "operator": "moreThan", "targetValue": 0 }
+          }
+        ],
+        "extractedValues": [
+          {
+            "name": "SEARCH_ID",
+            "type": "http_body",
+            "parser": { "type": "json_path", "value": "$.searchId" }
+          },
+          {
+            "name": "RESULT_ID",
+            "type": "http_body",
+            "parser": { "type": "json_path", "value": "$.results[0].id" }
+          }
+        ]
+      },
+      {
+        "name": "Create draft booking",
+        "subtype": "http",
+        "allowFailure": false,
+        "isCritical": true,
+        "request": {
+          "method": "POST",
+          "url": "https://{{PUBLIC_HOSTNAME}}/api/v1/bookings",
+          "timeout": 20,
+          "headers": {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+          },
+          "body": "{\"searchId\":\"{{ SEARCH_ID }}\",\"resultId\":\"{{ RESULT_ID }}\",\"productType\":\"flight\"}",
+          "bodyType": "application/json"
+        },
+        "assertions": [
+          { "type": "statusCode", "operator": "is", "target": 201 },
+          {
+            "type": "body",
+            "operator": "validatesJSONPath",
+            "target": { "jsonPath": "$.state", "operator": "is", "targetValue": "DRAFT" }
+          }
+        ],
+        "extractedValues": [
+          {
+            "name": "BOOKING_ID",
+            "type": "http_body",
+            "parser": { "type": "json_path", "value": "$.id" }
+          }
+        ]
+      },
+      {
+        "name": "Hold inventory",
+        "subtype": "http",
+        "allowFailure": false,
+        "isCritical": true,
+        "request": {
+          "method": "POST",
+          "url": "https://{{PUBLIC_HOSTNAME}}/api/v1/bookings/{{ BOOKING_ID }}/hold",
+          "timeout": 20,
+          "headers": {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+          },
+          "body": "{}",
+          "bodyType": "application/json"
+        },
+        "assertions": [
+          { "type": "statusCode", "operator": "is", "target": 200 },
+          {
+            "type": "body",
+            "operator": "validatesJSONPath",
+            "target": { "jsonPath": "$.state", "operator": "is", "targetValue": "HELD" }
+          },
+          {
+            "type": "body",
+            "operator": "validatesJSONPath",
+            "target": { "jsonPath": "$.holdExpiresAt", "operator": "isNot", "targetValue": null }
+          }
+        ],
+        "extractedValues": [
+          {
+            "name": "TOTAL_CENTS",
+            "type": "http_body",
+            "parser": { "type": "json_path", "value": "$.totalCents" }
+          },
+          {
+            "name": "CURRENCY",
+            "type": "http_body",
+            "parser": { "type": "json_path", "value": "$.currency" }
+          }
+        ]
+      },
+      {
+        "name": "Add passenger and contact details",
+        "subtype": "http",
+        "allowFailure": false,
+        "isCritical": true,
+        "request": {
+          "method": "PUT",
+          "url": "https://{{PUBLIC_HOSTNAME}}/api/v1/bookings/{{ BOOKING_ID }}/passengers",
+          "timeout": 20,
+          "headers": {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+          },
+          "body": "{\"passengers\":[{\"passengerType\":\"adult\",\"title\":\"Mx\",\"firstName\":\"Synthetic\",\"lastName\":\"Traveller\",\"dateOfBirth\":\"1988-03-14\",\"nationality\":\"GB\"}],\"contactEmail\":\"synthetic@loadgen.voyager.demo\",\"contactPhone\":\"+447700900999\"}",
+          "bodyType": "application/json"
+        },
+        "assertions": [{ "type": "statusCode", "operator": "is", "target": 200 }]
+      },
+      {
+        "name": "Authorize payment",
+        "subtype": "http",
+        "allowFailure": false,
+        "isCritical": true,
+        "request": {
+          "method": "POST",
+          "url": "https://{{PUBLIC_HOSTNAME}}/api/v1/payments/authorize",
+          "timeout": 30,
+          "headers": {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Idempotency-Key": "synthetic-{{ uuid }}"
+          },
+          "body": "{\"bookingId\":\"{{ BOOKING_ID }}\",\"amount\":{{ TOTAL_CENTS }},\"currency\":\"{{ CURRENCY }}\",\"card\":{\"number\":\"4242424242424242\",\"expiryMonth\":11,\"expiryYear\":2030,\"cvc\":\"123\",\"holderName\":\"Synthetic Traveller\",\"billingCountry\":\"GB\"},\"idempotencyKey\":\"synthetic-{{ uuid }}\"}",
+          "bodyType": "application/json"
+        },
+        "assertions": [
+          { "type": "statusCode", "operator": "is", "target": 201 },
+          {
+            "type": "body",
+            "operator": "validatesJSONPath",
+            "target": { "jsonPath": "$.state", "operator": "is", "targetValue": "AUTHORIZED" }
+          }
+        ],
+        "extractedValues": [
+          {
+            "name": "PAYMENT_ID",
+            "type": "http_body",
+            "parser": { "type": "json_path", "value": "$.id" }
+          }
+        ]
+      },
+      {
+        "name": "Confirm booking and issue PNR",
+        "subtype": "http",
+        "allowFailure": false,
+        "isCritical": true,
+        "request": {
+          "method": "POST",
+          "url": "https://{{PUBLIC_HOSTNAME}}/api/v1/bookings/{{ BOOKING_ID }}/confirm",
+          "timeout": 20,
+          "headers": {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+          },
+          "body": "{\"paymentId\":\"{{ PAYMENT_ID }}\"}",
+          "bodyType": "application/json"
+        },
+        "assertions": [
+          { "type": "statusCode", "operator": "is", "target": 200 },
+          {
+            "type": "body",
+            "operator": "validatesJSONPath",
+            "target": { "jsonPath": "$.state", "operator": "is", "targetValue": "CONFIRMED" }
+          },
+          {
+            "type": "body",
+            "operator": "validatesJSONPath",
+            "target": {
+              "jsonPath": "$.pnr",
+              "operator": "matches",
+              "targetValue": "^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "tick_every": 900,
+    "min_failure_duration": 0,
+    "min_location_failed": 1,
+    "monitor_name": "[Voyager] Booking API journey failing",
+    "monitor_priority": 1,
+    "retry": {
+      "count": 0,
+      "interval": 0
+    },
+    "monitor_options": {
+      "renotify_interval": 30
+    }
+  },
+  "message": "The end-to-end booking journey is broken. This test walks the real sequence from 05-FUNCTIONALITY.md § 2 — search, create draft, hold inventory, add passengers, authorize a card, confirm and issue a PNR — chaining the booking ID between steps exactly as the checkout screens do. If it fails, nobody can complete a booking through the API.\n\n**The failing step is the diagnosis. Read it first.**\n- **Search flights** — not a booking problem. Go to the *[Voyager] Flight search API latency and results* test and to *Voyager — Service Overview*.\n- **Create draft booking** — the search result could not be resolved. Usually the cached result set expired between the two steps, which points at `cache_ttl_seconds` being very low or Redis being unavailable.\n- **Hold inventory** — either the seat genuinely went, or the advisory lock timed out. *Voyager — Checkout Deep Dive* → *Advisory lock wait* separates the two: seconds of wait means contention, not scarcity.\n- **Add passenger and contact details** — a validation change. The payload here matches `passengersRequestSchema` in `packages/shared-schemas`; if that schema gained a required field, this test needs updating and the failure is expected.\n- **Authorize payment** — the payment provider. *Voyager — Checkout Deep Dive* → *Authorised vs declined vs errored per minute*. Note the assertion expects `AUTHORIZED`, so a **decline** also fails this step. That is intentional: a synthetic that tolerates declines cannot tell you whether checkout works.\n- **Confirm booking and issue PNR** — money moved and the booking did not confirm. This is the worst failure in the list. Do not wait for more evidence; go to *Voyager — Checkout Deep Dive* → *State transitions by resulting state* and find out how many bookings are stranded in `PENDING_PAYMENT`.\n\n**Chaos flags that break each step.**\n- Search: `gds_latency_ms`, `gds_error_rate`, `gds_provider_down`, `gds_rate_limit_aggressive` (**S1**, **S4**).\n- Hold: `hold_lock_contention`, `db_lock_storm`, `db_pool_starvation` (**S10**).\n- Authorize: `payment_latency_ms`, `payment_error_rate`, `payment_decline_rate` (**S2**). A 25% decline rate makes this test fail roughly one run in four, which looks like flakiness and is not.\n- Confirm: `payment_webhook_delay_ms` (**S2**) delays the callback that drives confirmation.\n- Reverse any of these with `scripts/chaos.sh revert S1|S2|S4|S10`, or clear everything with `make chaos-reset`.\n\n**This test writes real data.** Every passing run creates a confirmed booking. The contact address is on `loadgen.voyager.demo`, which is the convention from 05-FUNCTIONALITY.md § 2.8.1 for marking a record synthetic — anyone cleaning up demo data can find these by contact email. The interval is fifteen minutes rather than five for the same reason: four bookings an hour is enough to detect a broken checkout and little enough not to distort the business dashboards.\n\n**There are no retries, deliberately.** 05-FUNCTIONALITY.md § 2.4 sets client retries to zero for any mutating POST, because retrying a booking creation is how duplicate bookings happen. A synthetic that retries would both contradict that policy and mask the intermittent failures it exists to catch.\n\n**Dates are generated, not hardcoded**, so the departure is always thirty days out and the test cannot silently drift outside the booking window."
+}

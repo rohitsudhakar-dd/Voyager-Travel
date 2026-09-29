@@ -1,0 +1,21 @@
+{
+  "name": "[Voyager] Checkout degraded",
+  "type": "composite",
+  "query": "{{MONITOR_ID:business-payment-error-rate}} && {{MONITOR_ID:business-booking-throughput-drop}}",
+  "message": "{{#is_alert}}**Checkout is degraded and it is costing revenue.** Payment attempts are erroring *and* confirmed bookings have fallen more than 30% against the last half hour. Either signal alone has innocent explanations; together they do not.{{/is_alert}}\n\n**What this means in plain terms.** Guests are reaching the payment page, we are failing to get an answer from the payment provider, and bookings that would have been confirmed are not being confirmed. Some of those guests have a seat hold that is quietly counting down.\n\n**Do these three things, in this order.**\n1. Open *Voyager — Business Health* and note the current bookings-per-minute and revenue rate. That is your impact number, and you will want it for the incident timeline.\n2. Open *Voyager — Checkout Deep Dive*. *Authorised vs declined vs errored per minute* separates a broken provider from a strict one. *Booking and payment stages — p95* shows whether `payment.authorize` is slow as well as failing. *State transitions by resulting state* shows how many bookings are piling up in `PENDING_PAYMENT`.\n3. Run `scripts/chaos.sh status`. In this environment the answer is usually there, and it takes five seconds.\n\n**Chaos flags that produce exactly this.** Scenario **S2**, the payment provider brownout: `payment_latency_ms=3000`, `payment_error_rate=0.30`, `payment_decline_rate=0.25`, `payment_decline_mix=insufficient_funds`, `payment_webhook_delay_ms=15000`. The flag that makes *this composite* fire rather than just the decline widget move is `payment_error_rate` — declines alone are a correct business outcome and do not break checkout.\n\nReverse it with `scripts/chaos.sh revert S2`. If you are not sure what else is set, `make chaos-reset` clears every flag and undoes its side effects, and the stack is expected to be healthy again within sixty seconds without restarting anything.\n\n**If no chaos flag is set**, this is a genuine incident. Declare it, attach *Voyager — Business Health* for impact and *Voyager — Checkout Deep Dive* for diagnosis, and open the *Voyager — Incident Postmortem Template* notebook while the timeline is still fresh.\n{{#is_recovery}}Both legs have cleared: payment errors are back under 10% of attempts and confirmed bookings have recovered. Before closing, reconcile anything still sitting in `PENDING_PAYMENT` and check the booking-success SLO's error budget — a short outage at this stage can consume a surprising share of a 30-day budget.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:composite-checkout-degraded",
+    "signal:composite",
+    "scenario:S2"
+  ],
+  "priority": 1,
+  "options": {
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "renotify_interval": 30
+  }
+}

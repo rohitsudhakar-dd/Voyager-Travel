@@ -1,0 +1,23 @@
+{
+  "name": "Voyager — Search p95 under 800 ms",
+  "type": "monitor",
+  "description": "The proportion of time over a 7-day rolling window during which the search p95 latency monitor was not alerting, against a 99.0% objective (01-PRD.md § 6.2).\n\nA monitor-based SLO measures time, not requests. Every minute [Voyager] voyager-search p95 latency above 800 ms spends in the alert state is a minute of budget spent, regardless of how many searches happened in it. That makes the 800 ms threshold on that monitor part of this SLO's definition: widening it to stop the alerting would silently move the objective, which is the main way a monitor-based SLO gets quietly falsified.\n\nA single monitor is used rather than several because Datadog treats a multi-monitor SLO as breached whenever any of them alerts, and mixing latency with error-rate monitors would produce a number that means neither one thing nor the other.\n\nBurn-rate alerts are not attached here. Datadog does not offer them on monitor-based SLOs; the error-budget alerts live on Voyager — Booking success rate instead.",
+  "monitor_ids": ["{{MONITOR_ID:apm-latency-search-p95}}"],
+  "thresholds": [
+    {
+      "timeframe": "7d",
+      "target": 99.0,
+      "warning": 99.5
+    }
+  ],
+  "timeframe": "7d",
+  "target_threshold": 99.0,
+  "warning_threshold": 99.5,
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:search-latency-p95",
+    "service:voyager-search"
+  ]
+}

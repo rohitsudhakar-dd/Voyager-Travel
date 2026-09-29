@@ -1,0 +1,27 @@
+{
+  "name": "[Voyager] Postgres query mean execution time above 500 ms",
+  "type": "query alert",
+  "query": "avg(last_15m):( sum:postgresql.queries.time{env:demo} by {query_signature} / sum:postgresql.queries.count{env:demo} by {query_signature} ) / 1000000 > 500",
+  "message": "{{#is_alert}}Query signature `{{query_signature.name}}` is averaging {{value}} ms per execution. The SQL has not changed — that is what a signature is — so either the data, the plan, or the machine underneath it has.{{/is_alert}}\n{{#is_warning}}Query signature `{{query_signature.name}}` is averaging {{value}} ms per execution, past the {{warn_threshold}} ms warning line.{{/is_warning}}\n\n**About the metric.** There is no `postgresql.queries.duration` metric, despite the name used in 01-PRD.md § 6.2. Database Monitoring exposes `postgresql.queries.time` (cumulative execution time, nanoseconds) and `postgresql.queries.count` (executions); their ratio is the mean per execution, which is the number below. The division by one million converts nanoseconds to milliseconds. A monitor built on the metric name in the PRD would have silently never fired.\n\n**Likely cause, and how to tell them apart.**\n1. **A plan flip.** The classic: an index disappears and a seek becomes a scan. The tell is *Rows read per execution* on *Voyager — Data Layer* jumping by orders of magnitude for this signature while the SQL stays identical. Confirm with the **explain plan** in Database Monitoring — Index Scan becoming Seq Scan is unambiguous.\n2. **An N+1.** Mean time per execution can actually *fall* in an N+1 while the endpoint gets much slower, because the work is spread across hundreds of tiny queries. If this monitor is quiet but booking latency is bad, check execution *count* rather than duration.\n3. **Contention.** Time spent waiting on a lock is counted as execution time. If *Locks, waiting queries and deadlocks* is elevated at the same moment, the query is fine and something else is holding the row.\n4. **Genuinely expensive analytical work.** One reporting query is meant to be slow. Confirm the signature before treating this as a regression.\n\n**Where to look.** **Database Monitoring** → Query Metrics, filtered to this signature, then its explain plan. *Voyager — Data Layer* has the same data in dashboard form under *Slowest normalised queries* and *Sequential scans vs index scans*.\n\n**Chaos flags that produce this.** `db_drop_index=true` drops `idx_bookings_user_id_created_at`, which is the plan flip in case 1; `db_n_plus_one=true` turns the booking-list join into a loop, which is case 2. Together they are scenario **S3** — reverse with `scripts/chaos.sh revert S3`, and note that the reset **recreates the index**, so nothing is permanently lost. `db_lock_storm=true` (scenario **S10**) produces case 3. `db_slow_query_ms` adds a real `pg_sleep()` to the reporting query, which is case 4 made deliberate.\n\n`make chaos-reset` clears every flag and undoes the side effects, including recreating the index.\n{{#is_recovery}}Query signature `{{query_signature.name}}` is back under 500 ms per execution.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:dbm-query-time-regression",
+    "signal:database"
+  ],
+  "priority": 2,
+  "options": {
+    "thresholds": {
+      "critical": 500,
+      "warning": 250
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 120,
+    "renotify_interval": 0,
+    "new_group_delay": 300
+  }
+}

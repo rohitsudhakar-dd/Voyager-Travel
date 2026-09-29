@@ -1,0 +1,561 @@
+{
+  "title": "Voyager — Checkout Deep Dive",
+  "description": "D3 from 01-PRD.md § 7: stage-by-stage latency for the search → price → hold → pay → confirm path, hold expiry, payment decline codes, idempotency replays and the state machine.\n\nThe stage-latency widgets use the `spans` data source rather than APM trace metrics. This is not a stylistic choice: Datadog only derives `trace.*` metrics for entry spans and service-entry spans, so the sixteen custom spans listed in 03-EXECUTION-ORDER.md Phase 8 item 6 have no trace metrics at all and can only be queried as spans. The consequence is that these widgets depend on span indexing — if a retention filter drops `voyager-booking` spans, the stage breakdown empties out while the RED widgets on **Voyager — Service Overview** stay full.\n\n`$user_tier` resolves to the `tier` tag, which 05-FUNCTIONALITY.md § 14 puts on the booking metrics. Span-based widgets are not tier-scoped because spans carry `usr.tier`, a different key.",
+  "layout_type": "ordered",
+  "reflow_type": "auto",
+  "template_variables": [
+    {
+      "name": "env",
+      "prefix": "env",
+      "defaults": ["demo"]
+    },
+    {
+      "name": "service",
+      "prefix": "service",
+      "defaults": ["*"]
+    },
+    {
+      "name": "route",
+      "prefix": "resource_name",
+      "defaults": ["*"]
+    },
+    {
+      "name": "user_tier",
+      "prefix": "tier",
+      "defaults": ["*"]
+    }
+  ],
+  "widgets": [
+    {
+      "definition": {
+        "type": "note",
+        "content": "**Voyager — Checkout Deep Dive.** Read the stage-latency widget first and find the one bar that grew. Each stage maps to exactly one chaos flag, which is how a demo gets from symptom to cause in one step:\n\n- `payment.authorize` slow → `payment_latency_ms`\n- `payment.authorize` erroring → `payment_error_rate`\n- declines up, errors flat → `payment_decline_rate`\n- `booking.acquire_hold_lock` slow → `hold_lock_contention` or `db_lock_storm`\n- `pricing.evaluate_fare_rules` slow → `pricing_hot_path`\n- `search.fanout` slow → `gds_latency_ms`, or `redis_disabled` driving the fan-out rate up\n\nClear all of them with `make chaos-reset`.",
+        "background_color": "blue",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "top",
+        "show_tick": false,
+        "tick_pos": "50%",
+        "tick_edge": "left",
+        "has_padding": true
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Stage latency (custom spans)",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Booking and payment stages — p95 (ms)",
+              "description": "Span `@duration` is nanoseconds, hence the division by one million. Getting that wrong produces a graph that looks plausible and is off by six orders of magnitude.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "spans",
+                      "name": "validate_availability",
+                      "search": { "query": "env:$env.value service:voyager-booking operation_name:booking.validate_availability" },
+                      "compute": { "aggregation": "pc95", "metric": "@duration" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "spans",
+                      "name": "acquire_hold_lock",
+                      "search": { "query": "env:$env.value service:voyager-booking operation_name:booking.acquire_hold_lock" },
+                      "compute": { "aggregation": "pc95", "metric": "@duration" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "spans",
+                      "name": "hold_inventory",
+                      "search": { "query": "env:$env.value service:voyager-booking operation_name:booking.hold_inventory" },
+                      "compute": { "aggregation": "pc95", "metric": "@duration" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "spans",
+                      "name": "idempotency_check",
+                      "search": { "query": "env:$env.value service:voyager-payment operation_name:payment.idempotency_check" },
+                      "compute": { "aggregation": "pc95", "metric": "@duration" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "spans",
+                      "name": "build_request",
+                      "search": { "query": "env:$env.value service:voyager-payment operation_name:payment.build_request" },
+                      "compute": { "aggregation": "pc95", "metric": "@duration" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "spans",
+                      "name": "authorize",
+                      "search": { "query": "env:$env.value service:voyager-payment operation_name:payment.authorize" },
+                      "compute": { "aggregation": "pc95", "metric": "@duration" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "spans",
+                      "name": "persist_ledger",
+                      "search": { "query": "env:$env.value service:voyager-payment operation_name:payment.persist_ledger" },
+                      "compute": { "aggregation": "pc95", "metric": "@duration" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "spans",
+                      "name": "state_transition",
+                      "search": { "query": "env:$env.value service:voyager-booking operation_name:booking.state_transition" },
+                      "compute": { "aggregation": "pc95", "metric": "@duration" },
+                      "group_by": []
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "validate_availability / 1000000", "alias": "booking.validate_availability" },
+                    { "formula": "acquire_hold_lock / 1000000", "alias": "booking.acquire_hold_lock" },
+                    { "formula": "hold_inventory / 1000000", "alias": "booking.hold_inventory" },
+                    { "formula": "idempotency_check / 1000000", "alias": "payment.idempotency_check" },
+                    { "formula": "build_request / 1000000", "alias": "payment.build_request" },
+                    { "formula": "authorize / 1000000", "alias": "payment.authorize" },
+                    { "formula": "persist_ledger / 1000000", "alias": "payment.persist_ledger" },
+                    { "formula": "state_transition / 1000000", "alias": "booking.state_transition" }
+                  ],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Search and pricing stages — p95 (ms)",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "spans",
+                      "name": "cache_lookup",
+                      "search": { "query": "env:$env.value service:voyager-search operation_name:search.cache_lookup" },
+                      "compute": { "aggregation": "pc95", "metric": "@duration" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "spans",
+                      "name": "fanout",
+                      "search": { "query": "env:$env.value service:voyager-search operation_name:search.fanout" },
+                      "compute": { "aggregation": "pc95", "metric": "@duration" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "spans",
+                      "name": "normalize_results",
+                      "search": { "query": "env:$env.value service:voyager-search operation_name:search.normalize_results" },
+                      "compute": { "aggregation": "pc95", "metric": "@duration" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "spans",
+                      "name": "load_rules",
+                      "search": { "query": "env:$env.value service:voyager-pricing operation_name:pricing.load_rules" },
+                      "compute": { "aggregation": "pc95", "metric": "@duration" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "spans",
+                      "name": "evaluate_fare_rules",
+                      "search": { "query": "env:$env.value service:voyager-pricing operation_name:pricing.evaluate_fare_rules" },
+                      "compute": { "aggregation": "pc95", "metric": "@duration" },
+                      "group_by": []
+                    },
+                    {
+                      "data_source": "spans",
+                      "name": "apply_taxes",
+                      "search": { "query": "env:$env.value service:voyager-pricing operation_name:pricing.apply_taxes" },
+                      "compute": { "aggregation": "pc95", "metric": "@duration" },
+                      "group_by": []
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "cache_lookup / 1000000", "alias": "search.cache_lookup" },
+                    { "formula": "fanout / 1000000", "alias": "search.fanout" },
+                    { "formula": "normalize_results / 1000000", "alias": "search.normalize_results" },
+                    { "formula": "load_rules / 1000000", "alias": "pricing.load_rules" },
+                    { "formula": "evaluate_fare_rules / 1000000", "alias": "pricing.evaluate_fare_rules" },
+                    { "formula": "apply_taxes / 1000000", "alias": "pricing.apply_taxes" }
+                  ],
+                  "style": { "palette": "cool", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "State transitions by resulting state",
+              "description": "Grouped on the `booking.state` span tag from 03-EXECUTION-ORDER.md Phase 8 item 7. Under scenario S2 the `PENDING_PAYMENT` bar dwarfs `CONFIRMED`, which is the visual form of \"bookings are stalling rather than failing\".",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "spans",
+                      "name": "transitions",
+                      "search": { "query": "env:$env.value service:voyager-booking operation_name:booking.state_transition" },
+                      "compute": { "aggregation": "count" },
+                      "group_by": [
+                        {
+                          "facet": "@booking.state",
+                          "limit": 10,
+                          "sort": { "aggregation": "count", "order": "desc" }
+                        }
+                      ]
+                    }
+                  ],
+                  "formulas": [{ "formula": "transitions", "limit": { "count": 10, "order": "desc" } }]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Seat holds",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Holds created vs expired per minute",
+              "description": "A healthy demo expires some holds — abandoned carts are modelled deliberately. What matters is the ratio: expiries approaching creations means checkout is too slow to finish inside the hold TTL, which is the tail end of scenario S4.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "created",
+                      "query": "sum:voyager.hold.created{$env}.as_rate()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "expired",
+                      "query": "sum:voyager.hold.expired{$env}.as_rate()"
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "created * 60", "alias": "Created/min" },
+                    { "formula": "expired * 60", "alias": "Expired/min" }
+                  ],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Advisory lock wait — p95 and p99 (ms)",
+              "description": "`voyager.hold.lock_wait_ms` is the time spent waiting for the Postgres advisory lock, not the time holding it. Scenario S10 (`hold_lock_contention`, `db_lock_storm`, `db_pool_starvation`) moves this from single-digit milliseconds to seconds.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "p95",
+                      "query": "p95:voyager.hold.lock_wait_ms{$env}"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "p99",
+                      "query": "p99:voyager.hold.lock_wait_ms{$env}"
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "p95", "alias": "p95" },
+                    { "formula": "p99", "alias": "p99" }
+                  ],
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Payment",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Authorised vs declined vs errored per minute",
+              "description": "Declines and errors are different failures with different owners. A decline is a correct business outcome the provider chose; an error is a broken integration. 05-FUNCTIONALITY.md § 11 keeps them on separate flags (`payment_decline_rate` and `payment_error_rate`) for exactly this reason.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "authorized",
+                      "query": "sum:voyager.payment.authorized{$env}.as_rate()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "declined",
+                      "query": "sum:voyager.payment.declined{$env}.as_rate()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "errors",
+                      "query": "sum:voyager.payment.errors{$env}.as_rate()"
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "authorized * 60", "alias": "Authorised/min" },
+                    { "formula": "declined * 60", "alias": "Declined/min" },
+                    { "formula": "errors * 60", "alias": "Errored/min" }
+                  ],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Decline codes",
+              "description": "Scenario S2 sets `payment_decline_mix=insufficient_funds`, so one code should dominate. An even spread means the mix flag is not set and you are looking at the 2% baseline decline rate.",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "declines",
+                      "query": "sum:voyager.payment.declined{$env} by {decline_code,provider}",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "declines", "limit": { "count": 10, "order": "desc" } }]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "toplist",
+              "title": "Payment errors by kind",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "errors",
+                      "query": "sum:voyager.payment.errors{$env} by {provider,error_kind}",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "errors", "limit": { "count": 10, "order": "desc" } }]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Provider latency p95 by operation (ms)",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "provider_latency",
+                      "query": "p95:voyager.payment.provider_latency_ms{$env} by {provider,operation}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "provider_latency" }],
+                  "style": { "palette": "warm", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Idempotency replays by endpoint",
+              "description": "Replays are the system working correctly — a retried POST returning the first result instead of double-charging. A sudden climb usually means the client is retrying because something upstream got slow, so read it alongside the provider-latency widget.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "bars",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "replays",
+                      "query": "sum:voyager.payment.idempotency_replays{$env} by {endpoint}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "replays" }],
+                  "style": { "palette": "cool", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "type": "group",
+        "title": "Outcome",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "definition": {
+              "type": "timeseries",
+              "title": "Time to confirm — p50 / p95 by product (ms)",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "max", "value"],
+              "yaxis": { "include_zero": true },
+              "requests": [
+                {
+                  "display_type": "line",
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "p50",
+                      "query": "p50:voyager.booking.time_to_confirm_ms{$env} by {product}"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "p95",
+                      "query": "p95:voyager.booking.time_to_confirm_ms{$env} by {product}"
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "p50", "alias": "p50" },
+                    { "formula": "p95", "alias": "p95" }
+                  ],
+                  "style": { "palette": "dog_classic", "line_type": "solid", "line_width": "normal" }
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "query_value",
+              "title": "Booking success rate (4h)",
+              "description": "Confirmed over confirmed-plus-failed. This is the same ratio the booking-success SLO measures, shown here without the 30-day window so you can see the effect of a chaos flag inside a demo.",
+              "autoscale": false,
+              "precision": 2,
+              "custom_unit": "%",
+              "text_align": "center",
+              "time": { "live_span": "4h" },
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "confirmed",
+                      "query": "sum:voyager.booking.confirmed{$env,$user_tier}.as_count()",
+                      "aggregator": "sum"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "failed",
+                      "query": "sum:voyager.booking.failed{$env}.as_count()",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [{ "formula": "100 * confirmed / (confirmed + failed)" }],
+                  "conditional_formats": [
+                    { "comparator": "<", "value": 99, "palette": "white_on_red" },
+                    { "comparator": ">=", "value": 99, "palette": "white_on_green" }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "definition": {
+              "type": "list_stream",
+              "title": "Recent payment declines (logs)",
+              "description": "Matches the `Payment declined` warning emitted by payment-service. The columns are the facets defined in 05-FUNCTIONALITY.md § 12.1, so the decline code and the active chaos flags are visible without opening a single log line.",
+              "requests": [
+                {
+                  "response_format": "event_list",
+                  "query": {
+                    "data_source": "logs_stream",
+                    "query_string": "service:voyager-payment env:$env.value \"Payment declined\"",
+                    "indexes": [],
+                    "sort": { "column": "timestamp", "order": "desc" }
+                  },
+                  "columns": [
+                    { "field": "timestamp", "width": "auto" },
+                    { "field": "@payment.decline_code", "width": "compact" },
+                    { "field": "@usr.tier", "width": "compact" },
+                    { "field": "@chaos.active_flags", "width": "compact" },
+                    { "field": "content", "width": "full" }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

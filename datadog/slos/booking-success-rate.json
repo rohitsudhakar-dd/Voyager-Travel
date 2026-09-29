@@ -1,0 +1,40 @@
+{
+  "name": "Voyager — Booking success rate",
+  "type": "metric",
+  "description": "The proportion of booking attempts that reached CONFIRMED rather than failing, over a 30-day rolling window, against a 99.0% objective (01-PRD.md § 6.2).\n\nThe SLI is `voyager.booking.confirmed` as good events and `voyager.booking.failed` as bad events. Bookings still in flight are in neither count, which is deliberate: a booking that is merely slow has not yet succeeded or failed, and counting it either way would make the number react to latency instead of to outcomes. The consequence is worth knowing — during a payment brownout this SLI degrades more slowly than the business actually does, because stalled bookings sit in PENDING_PAYMENT contributing to no count at all. Watch the confirmed-versus-created gap on Voyager — Business Health alongside this.\n\nThis is the SLO the fast-burn and slow-burn error-budget alerts are attached to. Burn-rate alerts require a metric-based or time-slice SLO, so this is also the only one of the three that could carry them.",
+  "sli_specification": {
+    "count": {
+      "queries": [
+        {
+          "data_source": "metrics",
+          "name": "good",
+          "query": "sum:voyager.booking.confirmed{env:demo}.as_count()"
+        },
+        {
+          "data_source": "metrics",
+          "name": "bad",
+          "query": "sum:voyager.booking.failed{env:demo}.as_count()"
+        }
+      ],
+      "good_events_formula": "good",
+      "bad_events_formula": "bad"
+    }
+  },
+  "thresholds": [
+    {
+      "timeframe": "30d",
+      "target": 99.0,
+      "warning": 99.5
+    }
+  ],
+  "timeframe": "30d",
+  "target_threshold": 99.0,
+  "warning_threshold": 99.5,
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:booking-success-rate",
+    "service:voyager-booking"
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "name": "[Voyager] voyager-booking p95 latency above 1.5 s",
+  "type": "query alert",
+  "query": "avg(last_10m):p95:trace.fastapi.request{env:demo,service:voyager-booking} > 1.5",
+  "message": "{{#is_alert}}Booking requests are taking {{value}} seconds at p95. Seat holds are time-limited, so a slow booking service does not just annoy people — it expires inventory they thought they had.{{/is_alert}}\n{{#is_warning}}Booking p95 is {{value}} seconds, past the {{warn_threshold}} second warning line.{{/is_warning}}\n\n**Likely cause.** Booking is the most database-dependent service in the stack and its hot path takes a Postgres advisory lock, so the three realistic explanations are contention, the pool, and a bad query plan:\n1. **Advisory-lock contention.** Concurrent holds on the same inventory serialise. *Voyager — Checkout Deep Dive* → *Advisory lock wait — p95 and p99* moves from single-digit milliseconds to seconds when this is happening.\n2. **Connection pool exhaustion.** Requests queue before they reach Postgres at all, which looks like slow SQL but shows *falling* server-side connections on *Voyager — Data Layer*.\n3. **A query plan flip.** If the booking-list query lost its index, *Voyager — Data Layer* → *Rows read per execution* jumps by orders of magnitude for one query signature while the SQL text stays identical.\n\n**Where to look.** *Voyager — Checkout Deep Dive* first, for the stage breakdown across `booking.validate_availability`, `booking.acquire_hold_lock`, `booking.hold_inventory` and `booking.state_transition`. Then **Database Monitoring** for the query, or the **wait profile** in the Profiler if the time is inside the lock.\n\n**Chaos flags that produce this.**\n- `hold_lock_contention=true` widens the advisory-lock critical section; `db_lock_storm=true` holds a row lock on `inventory_holds`; `db_pool_starvation=true` shrinks the pool to two connections. All three together are scenario **S10** — reverse with `scripts/chaos.sh revert S10`.\n- `db_drop_index=true` plus `db_n_plus_one=true` is scenario **S3**, which mainly hits `GET /bookings/mine` — reverse with `scripts/chaos.sh revert S3`. The reset recreates the index; it is not lost.\n- `booking_memory_leak=true` (scenario **S7**) degrades latency slowly through GC pressure before it ends in an OOM kill.\n\n`make chaos-reset` clears everything, including recreating the dropped index.\n{{#is_recovery}}Booking p95 is back under threshold.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:apm-latency-booking-p95",
+    "service:voyager-booking",
+    "signal:latency"
+  ],
+  "priority": 2,
+  "options": {
+    "thresholds": {
+      "critical": 1.5,
+      "warning": 1
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

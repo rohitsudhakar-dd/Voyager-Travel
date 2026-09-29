@@ -1,0 +1,28 @@
+{
+  "name": "[Voyager] voyager-payment p95 latency above 2.5 s",
+  "type": "query alert",
+  "query": "avg(last_10m):p95:trace.fastapi.request{env:demo,service:voyager-payment} > 2.5",
+  "message": "{{#is_alert}}Payment authorisation is taking {{value}} seconds at p95. This is the last step before a booking is confirmed, so guests are sitting on the payment page with no idea whether they have been charged.{{/is_alert}}\n{{#is_warning}}Payment p95 is {{value}} seconds, past the {{warn_threshold}} second warning line.{{/is_warning}}\n\n**Likely cause.** Payment does very little itself; it builds a request, calls the provider, and writes a ledger row. The provider call is the only part that can plausibly take seconds, so start by confirming whether the time is ours or theirs.\n\n**Where to look.** *Voyager — Checkout Deep Dive* → *Booking and payment stages — p95*:\n- `payment.authorize` grew, everything else flat → the provider is slow. Cross-check *Provider latency p95 by operation*; the two should agree, and if they do, this is an upstream problem you can only mitigate, not fix.\n- `payment.idempotency_check` or `payment.persist_ledger` grew → the problem is ours, in Postgres or Redis.\n- `payment.build_request` grew → almost certainly CPU starvation on the container rather than anything in the code.\n\n**Watch the side effects.** Slow authorisation means bookings sit in `PENDING_PAYMENT` for longer, which means seat holds expire and clients retry. Rising `voyager.payment.idempotency_replays` alongside this alert is the retry storm, and it is the system protecting itself — replays are how a retried charge stays a single charge.\n\n**Chaos flag that reverses it.** `payment_latency_ms` adds the delay in `mock-payments`; scenario **S2** sets it to 3000 alongside `payment_error_rate=0.30` and `payment_decline_rate=0.25`. Clear just the latency with `scripts/chaos.sh set payment_latency_ms 0`, or unwind the whole brownout with `scripts/chaos.sh revert S2`. `payment_webhook_delay_ms` does *not* cause this — it delays the asynchronous callback, which shows up as slow confirmation rather than slow authorisation.\n{{#is_recovery}}Payment p95 is back under threshold. Check that nothing is still stuck in `PENDING_PAYMENT` on *Voyager — Checkout Deep Dive*.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:apm-latency-payment-p95",
+    "service:voyager-payment",
+    "signal:latency"
+  ],
+  "priority": 2,
+  "options": {
+    "thresholds": {
+      "critical": 2.5,
+      "warning": 1.5
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

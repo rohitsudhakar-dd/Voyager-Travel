@@ -1,0 +1,28 @@
+{
+  "name": "[Voyager] Notification consumer lag above 1000 messages",
+  "type": "query alert",
+  "query": "max(last_10m):max:kafka.consumer_lag{env:demo,consumer_group:voyager-notifications-v1,topic:voyager.notifications.outbound} by {partition} > 1000",
+  "message": "{{#is_alert}}Partition {{partition.name}} of `voyager.notifications.outbound` is {{value}} messages behind for consumer group `voyager-notifications-v1`. Bookings are confirming normally and confirmation emails are not being sent.{{/is_alert}}\n{{#is_warning}}Partition {{partition.name}} of `voyager.notifications.outbound` is {{value}} messages behind, past the {{warn_threshold}} warning line.{{/is_warning}}\n\n**Why this is worse than it looks.** Nothing upstream is broken. The booking succeeded, the guest saw a confirmation page, the record is correct — and the email never arrives. This is the failure mode people only discover through support tickets, which is exactly why it is worth a monitor.\n\n**Distinguish stopped from slow.** Open *Voyager — Data Layer* → *Consumer lag by group and topic*:\n- **Straight line climbing at a constant rate** → the consumer is not consuming at all. It is paused, crashed, or stuck in a rebalance.\n- **Climbing then flattening then climbing** → the consumer is running but slower than the producer. Throughput problem, not an availability one.\n\nThen read *End-to-end notification lag (seconds)* next to it. Offset lag tells you how many messages are queued; the seconds tell you how stale the newest delivered message is, and that second number is what a guest actually experiences.\n\n**Check the dead-letter queue too.** If *Notifications sent vs dead-lettered per minute* shows dead letters climbing alongside the lag, two things are wrong at once: the consumer is behind *and* the messages it does process are failing. *Dead-letter reasons by template* separates a failing email provider from malformed messages.\n\n**Chaos flags that produce this.**\n- `kafka_consumer_pause=voyager-notifications-v1` stops the group outright — this is the straight-line case. Reverse with `scripts/chaos.sh set kafka_consumer_pause \"\"`.\n- `kafka_slow_consumer_ms=2000` adds per-message delay — this is the slow case.\n- `kafka_poison_rate` and `email_failure_rate` fill the DLQ without necessarily creating lag.\n\nAll four together are scenario **S5**. Reverse with `scripts/chaos.sh revert S5`, or `make chaos-reset` for everything.\n\n**Use Data Streams Monitoring for the full picture.** It reports lag from the client side as well, and a broker that is healthy while a consumer is stalled looks identical to a healthy system if you only have one of the three views.\n{{#is_recovery}}Consumer lag on partition {{partition.name}} is back under 1000. The backlog will drain faster than it built, so expect a burst of delayed emails.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:kafka-consumer-lag-notifications",
+    "service:voyager-notifications",
+    "signal:queue"
+  ],
+  "priority": 2,
+  "options": {
+    "thresholds": {
+      "critical": 1000,
+      "warning": 500
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 120
+  }
+}

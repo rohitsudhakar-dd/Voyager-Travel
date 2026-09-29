@@ -1,0 +1,28 @@
+{
+  "name": "[Voyager] voyager-ai-support error rate above 5%",
+  "type": "query alert",
+  "query": "sum(last_10m):100 * ( sum:trace.fastapi.request.errors{env:demo,service:voyager-ai-support}.as_count() / sum:trace.fastapi.request.hits{env:demo,service:voyager-ai-support}.as_count() ) > 5",
+  "message": "{{#is_alert}}{{value}}% of support chat requests are failing. Nobody can book a flight through the assistant, but they can still book through the site, so treat this as a degraded surface rather than an outage.{{/is_alert}}\n{{#is_warning}}Support chat error rate is {{value}}%, past the {{warn_threshold}}% warning line.{{/is_warning}}\n\n**Likely cause.** The model call failing is by far the most common, either because the model returned an error or because the response could not be parsed into the tool call the service expected. The second case is the more interesting one: a model that answers in prose where a structured tool call was required produces a parse failure in our code, which looks like our bug and is not.\n\n**Where to look.** *Voyager — AI Support* → *Error rate*, then *Tool calls per minute by tool and outcome*. If tool calls have stopped happening rather than started failing, the model has changed behaviour rather than broken. **LLM Observability** shows the `workflow` → `llm` → `tool` chain for individual conversations, which is the only way to see which step actually threw.\n\n**Chaos flags that produce this.**\n- `llm_error_rate` makes `mock-llm` return 500 directly. Scenario **S9** sets it to 0.05 — clear with `scripts/chaos.sh set llm_error_rate 0`.\n- `llm_degrade_tools=true` makes the model answer in prose instead of calling tools, which is the parse-failure path described above. Same scenario.\n- Reverse the whole thing with `scripts/chaos.sh revert S9`.\n\n**What this monitor will never catch.** `llm_hallucinate=true` produces a fluent, fast, successful response containing a booking reference that does not exist. Errors stay at zero. Quality has to be checked by reading output or by an evaluation, not by this monitor.\n{{#is_recovery}}Support chat error rate is back under 5%.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:apm-error-rate-ai-support",
+    "service:voyager-ai-support",
+    "signal:errors"
+  ],
+  "priority": 3,
+  "options": {
+    "thresholds": {
+      "critical": 5,
+      "warning": 2
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "[Voyager] Spike in declined-payment log events",
+  "type": "log alert",
+  "query": "logs(\"service:voyager-payment env:demo \\\"Payment declined\\\"\").index(\"*\").rollup(\"count\").last(\"10m\") > 60",
+  "message": "{{#is_alert}}{{value}} payments were declined in the last ten minutes. A decline is a correct outcome — the provider refused the card — so nothing here is broken. What has changed is how *often* it is happening, and that is a revenue problem rather than a reliability one.{{/is_alert}}\n{{#is_warning}}{{value}} declines in the last ten minutes, past the {{warn_threshold}} warning line.{{/is_warning}}\n\n**Read the decline codes before anything else.** *Voyager — Checkout Deep Dive* → *Decline codes* is the whole diagnosis:\n- **One code dominating** → a provider-side policy or rule change. Every guest with that card condition is being refused, and there is nothing to fix in our code.\n- **An even spread across codes** → the population of guests changed, not the provider. Check whether a marketing push or the load generator's user mix changed.\n- **`insufficient_funds` specifically** → in this environment that is almost always `payment_decline_mix` being set deliberately.\n\n**Do not confuse this with a payment outage.** Declines and errors are different failures with different owners, and **[Voyager] Payment error rate above 10% of attempts** is the monitor for the other one. If both are firing, treat the errors as the incident and the declines as a side effect.\n\n**The log line this matches.** `payment-service` logs `Payment declined` at warning level with `payment.decline_code` attached, alongside the standard facets from 05-FUNCTIONALITY.md § 12.1 — `usr.tier`, `http.status_code` and `chaos.active_flags`. That last facet is the fastest way to tell a demo from an incident without leaving the log explorer.\n\n**Chaos flags that produce this.**\n- `payment_decline_rate` is the direct cause; the default is 0.02 and scenario **S2** raises it to 0.25. Reset with `scripts/chaos.sh set payment_decline_rate 0.02` — note that zero is *not* the correct baseline, since a payment system with no declines at all is not realistic.\n- `payment_decline_mix` chooses which code dominates; `mixed` is the default.\n- Unwind the whole brownout with `scripts/chaos.sh revert S2`.\n\n**A note on the threshold.** Sixty declines per ten minutes is derived from the 2% baseline decline rate in 05-FUNCTIONALITY.md § 11 against the booking volume 01-PRD.md § 9 calls for, not from observed data. It needs one re-tune once Phase 11's load generation has been running long enough to establish a real baseline; the right target is roughly three times the quiet-period count. The longer-term improvement is to build this on the `voyager.logs.payment_declines` log-based metric named in 01-PRD.md § 6.1, which would allow a percentage-change monitor instead of an absolute count and would stop the threshold drifting every time load changes.\n{{#is_recovery}}Decline volume is back under the threshold.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:log-payment-declines-spike",
+    "service:voyager-payment",
+    "signal:logs"
+  ],
+  "priority": 3,
+  "options": {
+    "thresholds": {
+      "critical": 60,
+      "warning": 30
+    },
+    "enable_logs_sample": true,
+    "groupby_simple_monitor": false,
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}

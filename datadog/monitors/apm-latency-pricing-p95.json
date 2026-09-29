@@ -1,0 +1,28 @@
+{
+  "name": "[Voyager] voyager-pricing p95 latency above 500 ms",
+  "type": "query alert",
+  "query": "avg(last_10m):p95:trace.http.request{env:demo,service:voyager-pricing} > 0.5",
+  "message": "{{#is_alert}}Fare pricing is taking {{value}} seconds at p95. Pricing sits inside every search response, so this is being paid by every guest looking at results.{{/is_alert}}\n{{#is_warning}}Pricing p95 is {{value}} seconds, past the {{warn_threshold}} second warning line.{{/is_warning}}\n\n**Likely cause.** Pricing is CPU-bound Go, with no database and no network calls on the hot path, so slowness here is almost always the fare-rule evaluation loop rather than a dependency. The rule set is normally reached through an index; bypassing that index turns the evaluation into a quadratic scan over every rule for every fare, which is exactly the shape a CPU profile makes obvious.\n\n**Where to look.**\n1. *Voyager — Checkout Deep Dive* → *Search and pricing stages — p95*. If `pricing.evaluate_fare_rules` grew and `pricing.load_rules` and `pricing.apply_taxes` did not, the loop is the problem.\n2. The **Profiler** for `voyager-pricing`. A CPU flame graph over the alert window puts the quadratic loop at the top, and Code Hotspots links the span straight to the line.\n3. *Voyager — Service Overview* → *Deployed versions — p95 by DD_VERSION*. If two versions are reporting and only one is slow, you have a deployment regression rather than a load problem.\n\n**Chaos flag that reverses it.** `pricing_hot_path=true` is what bypasses the fare-rule index. Scenario **S6** pairs it with `version_override=v2-bad` so the regression lines up with a deployment marker. Turn it off with `scripts/chaos.sh set pricing_hot_path false`, or unwind the whole scenario with `scripts/chaos.sh revert S6`. `service_latency_ms` can also target `voyager-pricing` directly, which produces flat added latency with no profile signature at all — a useful contrast.\n{{#is_recovery}}Pricing p95 is back under threshold.{{/is_recovery}}",
+  "tags": [
+    "project:voyager",
+    "team:demo",
+    "managed_by:voyager-datadog-config",
+    "voyager_id:apm-latency-pricing-p95",
+    "service:voyager-pricing",
+    "signal:latency"
+  ],
+  "priority": 3,
+  "options": {
+    "thresholds": {
+      "critical": 0.5,
+      "warning": 0.3
+    },
+    "notify_audit": false,
+    "notify_no_data": false,
+    "include_tags": true,
+    "require_full_window": false,
+    "evaluation_delay": 60,
+    "renotify_interval": 0,
+    "new_group_delay": 60
+  }
+}
