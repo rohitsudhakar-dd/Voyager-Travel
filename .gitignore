@@ -1,0 +1,52 @@
+# ---- Secrets ----
+.env
+.env.local
+*.pem
+*.key
+
+# ---- Node ----
+node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- Go ----
+bin/
+vendor/
+*.test
+*.out
+
+# ---- Test / tooling output ----
+playwright-report/
+test-results/
+coverage/
+junit*.xml
+*.cpuprofile
+
+# ---- Local state ----
+.data/
+tmp/
+*.log
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

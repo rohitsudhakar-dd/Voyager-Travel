@@ -1,0 +1,123 @@
+# Voyager -- base stack: data layer, application services, Datadog Agent.
+#
+# Overlays:
+#   docker-compose.dev.yml      hot reload + data-layer ports published to the host
+#   docker-compose.loadgen.yml  k6 and Playwright traffic generators
+#
+# Only the edge proxy is ever allowed to bind a host port in this file. Every
+# other port stays on the private `voyager` network (02-TECH-STACK.md § 9).
+
+name: voyager
+
+networks:
+  voyager:
+    name: voyager
+    driver: bridge
+
+volumes:
+  pgdata:
+    name: voyager_pgdata
+  redisdata:
+    name: voyager_redisdata
+  kafkadata:
+    name: voyager_kafkadata
+
+services:
+  postgres:
+    image: postgres:16.4
+    container_name: postgres
+    hostname: postgres
+    restart: unless-stopped
+    networks: [voyager]
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-voyager}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required -- see .env.example}
+      POSTGRES_DB: ${POSTGRES_DB:-voyager}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    mem_limit: 3g
+    shm_size: 512m
+
+  redis:
+    image: redis:7.4
+    container_name: redis
+    hostname: redis
+    restart: unless-stopped
+    networks: [voyager]
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - redisdata:/data
+      - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    mem_limit: 512m
+
+  kafka:
+    image: apache/kafka:3.8.1
+    container_name: kafka
+    hostname: kafka
+    restart: unless-stopped
+    networks: [voyager]
+    environment:
+      # Single-broker KRaft: no ZooKeeper container, which saves ~400 MB.
+      # CLUSTER_ID must be a 22-character base64 UUID; it is pinned so that a
+      # re-created volume formats to the same cluster.
+      CLUSTER_ID: 5L6g3nShT-eMCtK--X86sw
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # Topics are created explicitly by the init job in Phase 4 so that
+      # partition counts and consumer groups match 05-FUNCTIONALITY.md § 6.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_HEAP_OPTS: -Xmx1g -Xms1g
+      # JMX on 9999 is what the Agent's `kafka` check scrapes for broker
+      # metrics; Data Streams Monitoring covers lag from the client side.
+      KAFKA_JMX_OPTS: >-
+        -Dcom.sun.management.jmxremote
+        -Dcom.sun.management.jmxremote.authenticate=false
+        -Dcom.sun.management.jmxremote.ssl=false
+        -Dcom.sun.management.jmxremote.local.only=false
+        -Dcom.sun.management.jmxremote.port=9999
+        -Dcom.sun.management.jmxremote.rmi.port=9999
+        -Djava.rmi.server.hostname=kafka
+    volumes:
+      - kafkadata:/var/lib/kafka
+    healthcheck:
+      # KAFKA_JMX_OPTS is inherited by every CLI tool launched in this
+      # container, and each one then tries to bind 9999 -- which the broker
+      # already holds. Clear it for anything run alongside the broker.
+      test: ["CMD-SHELL", "KAFKA_JMX_OPTS= /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    mem_limit: 2g

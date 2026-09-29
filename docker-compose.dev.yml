@@ -1,0 +1,29 @@
+# Local-development overlay: publishes the data layer to the host so psql,
+# redis-cli and kafka tooling work from a terminal.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Never apply this overlay on the EC2 host. The security group assumes only
+# Caddy is reachable (02-TECH-STACK.md § 9).
+
+name: voyager
+
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  kafka:
+    # Clients on the host resolve `localhost:19092`; clients inside the
+    # network keep using `kafka:9092`. Both listeners must be advertised or
+    # one side gets an address it cannot reach.
+    environment:
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:19092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+    ports:
+      - "127.0.0.1:19092:19092"
