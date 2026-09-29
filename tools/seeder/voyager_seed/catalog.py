@@ -138,6 +138,18 @@ TRUNK_AIRPORTS = (
     "JNB", "CAI", "NBO", "BKK", "KUL", "AKL", "ATH", "EDI", "MAN", "BRU",
 )
 
+# Routes every document uses in its examples, and which the exit criteria
+# search for by name. They are seeded at the highest flight density so a demo
+# search always returns a full page of results.
+DEMO_ROUTES = (
+    ("LHR", "JFK"),
+    ("LHR", "CDG"),
+    ("JFK", "LAX"),
+    ("LHR", "DXB"),
+    ("AMS", "BCN"),
+    ("SFO", "NRT"),
+)
+
 # Cabin mix used when generating historical bookings.
 CABIN_WEIGHTS = (("economy", 0.74), ("economy_plus", 0.15),
                  ("business", 0.10), ("first", 0.01))

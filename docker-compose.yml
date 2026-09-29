@@ -55,6 +55,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-voyager}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required -- see .env.example}
       POSTGRES_DB: ${POSTGRES_DB:-voyager}
+      # Read by init/02-readonly-role.sql via psql's \getenv, on first boot only.
+      MOCK_DB_PASSWORD: ${MOCK_DB_PASSWORD:?MOCK_DB_PASSWORD is required -- see .env.example}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./infra/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
@@ -139,6 +141,113 @@ services:
       retries: 10
       start_period: 40s
     mem_limit: 2g
+
+  # ------------------------------------------------- mock third parties --
+  # These stand in for the outside world. They are the only place in the
+  # stack where latency, failure and rate limits are simulated rather than
+  # real, which is what makes a demo repeatable.
+
+  mock-gds:
+    build:
+      context: ./mocks/mock-gds
+    container_name: mock-gds
+    hostname: mock-gds
+    restart: unless-stopped
+    networks: [voyager]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DD_SERVICE: mock-gds
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-voyager}
+      # A third party does not get write access to the booking database.
+      MOCK_DB_USER: voyager_readonly
+      MOCK_DB_PASSWORD: ${MOCK_DB_PASSWORD:?MOCK_DB_PASSWORD is required -- see .env.example}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4900/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    mem_limit: 384m
+
+  mock-payments:
+    build:
+      context: ./mocks/mock-payments
+    container_name: mock-payments
+    hostname: mock-payments
+    restart: unless-stopped
+    networks: [voyager]
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      DD_SERVICE: mock-payments
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      PAYMENT_WEBHOOK_URL: http://payment-service:4020/webhooks/payments
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4910/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    mem_limit: 256m
+
+  mock-email:
+    build:
+      context: ./mocks/mock-email
+    container_name: mock-email
+    hostname: mock-email
+    restart: unless-stopped
+    networks: [voyager]
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      DD_SERVICE: mock-email
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4920/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    mem_limit: 256m
+
+  mock-llm:
+    build:
+      context: ./mocks/mock-llm
+    container_name: mock-llm
+    hostname: mock-llm
+    restart: unless-stopped
+    networks: [voyager]
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      DD_SERVICE: mock-llm
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      LLM_MODEL: ${LLM_MODEL:-voyager-support-v1}
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4930/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    mem_limit: 384m
 
   # ------------------------------------------------------------- services --
 

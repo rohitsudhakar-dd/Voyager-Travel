@@ -60,6 +60,21 @@ def build_routes(config: SeedConfig, rng: random.Random, airports: list[dict]) -
     ]
     rng.shuffle(trunk_pairs)
 
+    # The demo routes are pinned to the front so they always land in the
+    # densest tier. LHR-JFK in particular is the route every document uses as
+    # its example and is an explicit phase 3 exit criterion; leaving it to the
+    # shuffle means it is occasionally absent, and a demo that opens with an
+    # empty result page is not a demo.
+    pinned = [
+        pair
+        for pair in catalog.DEMO_ROUTES
+        if pair[0] in by_code and pair[1] in by_code
+    ]
+    pinned_set = {frozenset(pair) for pair in pinned}
+    trunk_pairs = pinned + [
+        pair for pair in trunk_pairs if frozenset(pair) not in pinned_set
+    ]
+
     airline_codes = [code for code, *_ in catalog.AIRLINES]
     routes: list[Route] = []
 

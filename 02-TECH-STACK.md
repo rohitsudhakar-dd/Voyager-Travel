@@ -336,6 +336,7 @@ POSTGRES_USER=voyager
 POSTGRES_PASSWORD=
 POSTGRES_DB=voyager
 DD_PG_PASSWORD=                  # for the datadog monitoring role
+MOCK_DB_PASSWORD=                # for voyager_readonly, the role mock-gds uses
 REDIS_URL=redis://redis:6379
 KAFKA_BROKERS=kafka:9092
 
