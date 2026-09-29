@@ -1,0 +1,101 @@
+# Voyager -- load-generation overlay (03-EXECUTION-ORDER.md Phase 11).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.loadgen.yml \
+#     --profile loadgen up -d
+#
+# Both generators sit behind the `loadgen` profile, so a plain `make up`
+# brings up a quiet stack. That matters more than it sounds: continuous
+# traffic makes it impossible to tell whether a chaos flag you just toggled
+# did anything, and it costs Datadog ingest around the clock.
+#
+# Neither container publishes a host port and neither needs one. They talk to
+# `api-gateway` and `web-ui` over the private `voyager` network, which is the
+# same path a real client takes minus the edge proxy.
+
+name: voyager
+
+services:
+  # k6. Six weighted journeys against the public API, on a diurnal curve.
+  # Steerable at runtime from POST /api/v1/admin/loadgen; see
+  # tools/loadgen-api/src/settings.js.
+  loadgen-api:
+    build:
+      context: ./tools/loadgen-api
+    container_name: loadgen-api
+    hostname: loadgen-api
+    profiles: ["loadgen"]
+    restart: unless-stopped
+    networks: [voyager]
+    depends_on:
+      redis:
+        condition: service_healthy
+      api-gateway:
+        condition: service_healthy
+    environment:
+      DD_SERVICE: voyager-loadgen-api
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      GATEWAY_BASE_URL: ${GATEWAY_BASE_URL:-http://api-gateway:4000}
+      LOADGEN_API_ENABLED: ${LOADGEN_API_ENABLED:-true}
+      LOADGEN_API_VUS: ${LOADGEN_API_VUS:-15}
+    labels:
+      # The Agent that reads this arrives in Phase 8. A generator's own
+      # chatter is the single largest source of log volume in the stack and
+      # none of it describes the product, so it is excluded at the container
+      # rather than filtered later. The Agent-side equivalent, if you would
+      # rather keep the exclusion in one place, is
+      # DD_CONTAINER_EXCLUDE_LOGS="name:loadgen-api name:loadgen-browser".
+      com.datadoghq.ad.logs_exclude: "true"
+    mem_limit: 256m
+
+  # Playwright. Two headless Chromium sessions walking the funnel, because
+  # RUM only exists if a real browser engine runs the SDK. Waits quietly if
+  # `web-ui` is not up yet rather than restarting in a loop.
+  loadgen-browser:
+    build:
+      context: ./tools/loadgen-browser
+    container_name: loadgen-browser
+    hostname: loadgen-browser
+    profiles: ["loadgen"]
+    restart: unless-stopped
+    networks: [voyager]
+    depends_on:
+      redis:
+        condition: service_healthy
+      api-gateway:
+        condition: service_healthy
+    environment:
+      DD_SERVICE: voyager-loadgen-browser
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      # The origin a browser would type, so RUM records the same one a real
+      # session does. Behind the edge proxy in a deployed stack; the
+      # container directly on a laptop, where `edge` may not be running.
+      WEB_BASE_URL: ${WEB_BASE_URL:-http://web-ui:8080}
+      # Where the page's API calls are replayed when the bundle was built
+      # against a public origin that only resolves from the host; see
+      # forwardApiToGateway in tools/loadgen-browser/src/session.ts.
+      GATEWAY_BASE_URL: ${GATEWAY_BASE_URL:-http://api-gateway:4000}
+      LOADGEN_BROWSER_ENABLED: ${LOADGEN_BROWSER_ENABLED:-true}
+      LOADGEN_BROWSER_CONCURRENCY: ${LOADGEN_BROWSER_CONCURRENCY:-2}
+    labels:
+      com.datadoghq.ad.logs_exclude: "true"
+    # 02-TECH-STACK.md § 9.1. Chromium will happily use everything it is
+    # given; without a limit it is the process that gets the host
+    # OOM-killer's attention, and it takes Postgres with it.
+    mem_limit: 1536m
+
+# Health-check requests are excluded from trace sampling, but not from here:
+# the rule belongs to the tracers in the application containers, which this
+# overlay does not own. Phase 8 wires it. The value is
+#
+#   DD_TRACE_SAMPLING_RULES='[{"service":"*","resource":"GET /health","sample_rate":0.0},
+#                             {"service":"*","resource":"GET /ready","sample_rate":0.0}]'
+#
+# and it wants to be set in every mode, not only by `make idle-mode`.
+# 02-TECH-STACK.md § 8 currently says demo-mode leaves the variable empty,
+# which would put ~20 health probes a minute per service back into APM for no
+# reason; 05-FUNCTIONALITY.md § 16 already says /health is excluded from
+# sampling. Worth reconciling the two when the Agent lands.

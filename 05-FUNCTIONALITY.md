@@ -140,6 +140,18 @@ All require header `X-Voyager-Admin: ${ADMIN_SECRET}`. Return `401` otherwise, w
 | `POST` | `/admin/seed/reset` | Re-seed (async job, returns a job ID) |
 | `POST` | `/admin/version` | `{version}` — override `DD_VERSION` at runtime to fake a deploy for scenario S6 |
 
+### 2.8.1 Load-generator state in Redis
+
+`POST /admin/loadgen` writes its settings blob to `voyager:loadgen`, and both generators poll that key with the same 2–5 second cache and fail-open behaviour the chaos readers use. Two further keys belong to the generators rather than to the gateway:
+
+| Key | Type | Why it exists |
+|---|---|---|
+| `voyager:loadgen` | string (JSON) | The settings blob the admin API writes and the generators read. |
+| `voyager:loadgen:stats` | hash | What each generator currently believes — enabled, intensity, diurnal factor, journey counters, whether the front end is reachable. k6 only prints its counters when a run ends, and these runs do not end, so the admin console's Load tab and `scripts/verify-loadgen.sh` read this instead. |
+| `voyager:loadgen:pnrs` | list (JSON) | Booking references the generator confirmed for itself, recycled by its manage, cancel and support journeys. Generated traffic must never cancel a seeded booking: the power users' history is the subject of scenario S3, and eroding it would break that demo silently. |
+
+Generated bookings carry a contact address on `loadgen.voyager.demo`, which exists nowhere and marks a booking as synthetic for anyone querying or clearing out demo data.
+
 ---
 
 ## 3. Data model
