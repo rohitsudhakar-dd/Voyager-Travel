@@ -392,6 +392,110 @@ services:
       start_period: 20s
     mem_limit: 512m
 
+  loyalty-service:
+    build:
+      context: ./services/loyalty-service
+    container_name: loyalty-service
+    hostname: loyalty-service
+    restart: unless-stopped
+    networks: [voyager]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *data-env
+      DD_SERVICE: voyager-loyalty
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+    healthcheck:
+      # 127.0.0.1, not localhost: busybox wget resolves localhost to ::1 first
+      # and Fastify is listening on IPv4 only, so the probe is refused while
+      # the service is perfectly healthy.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4050/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    mem_limit: 512m
+
+  # No Postgres: notification-worker owns no table and reads none. Its state is
+  # the consumer group offset.
+  notification-worker:
+    build:
+      context: ./services/notification-worker
+    container_name: notification-worker
+    hostname: notification-worker
+    restart: unless-stopped
+    networks: [voyager]
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      mock-email:
+        condition: service_healthy
+    environment:
+      DD_SERVICE: voyager-notifications
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+      EMAIL_BASE_URL: http://mock-email:4920
+      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-no-reply@voyager.demo}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4060/health').read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    mem_limit: 512m
+
+  ai-support-service:
+    build:
+      context: ./services/ai-support-service
+    container_name: ai-support-service
+    hostname: ai-support-service
+    restart: unless-stopped
+    networks: [voyager]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mock-llm:
+        condition: service_healthy
+      booking-service:
+        condition: service_healthy
+      loyalty-service:
+        condition: service_healthy
+    environment:
+      # *data-env also carries KAFKA_BROKERS, which this service does not use.
+      <<: *data-env
+      DD_SERVICE: voyager-ai-support
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://mock-llm:4930/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-mock-key}
+      LLM_MODEL: ${LLM_MODEL:-voyager-support-v1}
+      BOOKING_BASE_URL: http://booking-service:4030
+      LOYALTY_BASE_URL: http://loyalty-service:4050
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4070/health').read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    mem_limit: 512m
+
   api-gateway:
     build:
       context: ./services/api-gateway

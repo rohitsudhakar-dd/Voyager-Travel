@@ -10,6 +10,9 @@
 set -uo pipefail
 
 GATEWAY=${GATEWAY_URL:-http://localhost:4000}
+# Two internal endpoints are exercised directly because they exist for the BFF
+# rather than for the browser, and so have no public route.
+LOYALTY_URL=${LOYALTY_URL:-http://localhost:4050}
 ADMIN_SECRET=${ADMIN_SECRET:-$(grep -E '^ADMIN_SECRET=' .env | cut -d= -f2-)}
 ADMIN_HEADER="x-voyager-admin: ${ADMIN_SECRET}"
 
@@ -423,6 +426,79 @@ assert 'an anonymous home page is still 200' "$code" 200
 assert_at_least 'it still lists popular airports' \
   "$(python3 -c "
 import json; print(len(json.load(open('/tmp/voyager-g-home.json'))['popularAirports']))")" 1
+
+# ------------------------------------------- the phase 5 services, joined up --
+
+section 'Loyalty and support answer through the gateway'
+
+code=$(curl -s -o /tmp/voyager-g-loyalty.json -w '%{http_code}' \
+  -H "authorization: Bearer $access" "$GATEWAY/api/v1/loyalty/me")
+assert 'GET /loyalty/me is 200' "$code" 200
+assert 'a brand-new member starts at standard' \
+  "$(field /tmp/voyager-g-loyalty.json tier)" standard
+
+# The preview is the checkout widget. Taxes must not earn, and the fare class
+# must select its multiplier -- the two things that were silently wrong when
+# booking.confirmed carried only a total.
+preview='{"userId":null,"amountCents":10000,"taxesCents":2000,"fareClassCode":"ECOSAVER","currency":"GBP"}'
+code=$(curl -s -o /tmp/voyager-g-preview.json -w '%{http_code}' \
+  -X POST "$LOYALTY_URL/v1/loyalty/preview" \
+  -H 'content-type: application/json' -d "$preview")
+assert 'POST /loyalty/preview is 200' "$code" 200
+assert 'taxes are excluded from the eligible spend' \
+  "$(field /tmp/voyager-g-preview.json eligibleCents)" 8000
+assert 'the fare class picks up its points multiplier' \
+  "$(field /tmp/voyager-g-preview.json fareMultiplier)" 0.75
+assert 'so the quote is 80 units at 0.75' \
+  "$(field /tmp/voyager-g-preview.json pointsToEarn)" 60
+
+# The booking made above is confirmed asynchronously, so give the consumer a
+# moment before asking what it accrued.
+code=$(curl -s -o /tmp/voyager-g-accrual.json -w '%{http_code}' \
+  "$LOYALTY_URL/v1/loyalty/$(field /tmp/voyager-g-signup.json user.id)/accruals/$booking_id")
+assert 'an accrual lookup for an unaccrued booking is 200, not 404' "$code" 200
+assert 'and reports no accrual rather than an error' \
+  "$(field /tmp/voyager-g-accrual.json accrual)" ''
+
+conversation=$(curl -s -X POST "$GATEWAY/api/v1/support/conversations" \
+  -H 'content-type: application/json' -d '{"subject":"Where is my booking?"}')
+conversation_id=$(python3 -c "
+import json
+doc = json.loads('''$conversation''')
+print(doc.get('conversationId') or doc.get('id') or '')")
+[[ -n "$conversation_id" ]] \
+  && ok 'a support conversation can be opened' || bad 'a support conversation can be opened'
+
+# A confirmed seeded booking, looked up by PNR and surname -- the phase 5 exit
+# criterion, and the one that the mock-llm surname regex used to break.
+pnr=$(docker compose exec -T postgres psql -U voyager -d voyager -tAc \
+  "SELECT b.pnr FROM voyager.bookings b JOIN voyager.passengers p ON p.booking_id = b.id
+   WHERE b.pnr IS NOT NULL AND b.state = 'CONFIRMED' LIMIT 1" | tr -d '[:space:]')
+surname=$(docker compose exec -T postgres psql -U voyager -d voyager -tAc \
+  "SELECT p.last_name FROM voyager.bookings b JOIN voyager.passengers p ON p.booking_id = b.id
+   WHERE b.pnr = '$pnr' LIMIT 1" | tr -d '[:space:]')
+
+ask=$(printf '{"content":"Where is my booking PNR %s? My last name is %s"}' "$pnr" "$surname")
+curl -s -N -X POST "$GATEWAY/api/v1/support/conversations/$conversation_id/messages" \
+  -H 'content-type: application/json' -d "$ask" -m 40 > /tmp/voyager-g-sse.txt
+
+assert 'the turn calls lookup_booking' \
+  "$(grep -c '"tool": "lookup_booking"' /tmp/voyager-g-sse.txt | tr -d '[:space:]' | head -c1)" 2
+
+# The surname, not the word "is" -- which is what the old regex extracted from
+# "my last name is Lovelace".
+assert 'the surname is extracted from the sentence, not the word before it' \
+  "$(python3 -c "
+import json, re
+for line in open('/tmp/voyager-g-sse.txt'):
+    if line.startswith('data:') and 'lookup_booking' in line and 'args' in line:
+        print(json.loads(line[5:])['args'].get('lastName', ''))
+        break")" "$surname"
+
+assert 'the tool found the booking' \
+  "$(grep -c '\"outcome\": \"ok\"' /tmp/voyager-g-sse.txt | tr -d '[:space:]' | head -c1)" 1
+assert_at_least 'and the answer streams back as tokens' \
+  "$(grep -c '^event: token' /tmp/voyager-g-sse.txt | tr -d '[:space:]')" 1
 
 # ---------------------------------------------------------------- status --
 

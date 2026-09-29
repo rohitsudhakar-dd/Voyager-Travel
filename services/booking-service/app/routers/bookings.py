@@ -135,6 +135,7 @@ async def create_booking(body: CreateBooking) -> dict:
                 "origin": segment.get("origin"),
                 "destination": segment.get("destination"),
                 "cabin": fare.get("cabin"),
+                "fareClassCode": fare.get("basis"),
                 "refundable": fare.get("refundable", False),
             },
             items=items,
@@ -144,7 +145,7 @@ async def create_booking(body: CreateBooking) -> dict:
         envelope.TOPIC_BOOKINGS,
         booking["id"],
         "booking.created",
-        _event_payload(booking),
+        envelope.booking_payload(booking),
         correlation_id=current_request_id(),
     )
     log.info(
@@ -212,7 +213,7 @@ async def hold_booking(booking_id: str) -> dict:
         envelope.TOPIC_BOOKINGS,
         booking_id,
         "booking.held",
-        {**_event_payload(booking), "holdExpiresAt": booking["hold_expires_at"]},
+        {**envelope.booking_payload(booking), "holdExpiresAt": booking["hold_expires_at"]},
         correlation_id=current_request_id(),
     )
     log.info(
@@ -398,7 +399,7 @@ async def cancel_booking(booking_id: str, body: Cancel) -> dict:
         booking_id,
         "booking.cancelled",
         {
-            **_event_payload(booking),
+            **envelope.booking_payload(booking),
             "reason": body.reason,
             "refundCents": refund_cents,
         },
@@ -557,23 +558,6 @@ async def _items(booking_id: str) -> list[dict]:
 async def _passengers(booking_id: str) -> list[dict]:
     async with db.session() as session:
         return await booking_repo.passengers_for(session, booking_id)
-
-
-def _event_payload(booking: dict) -> dict[str, Any]:
-    metadata = booking.get("metadata") or {}
-    return {
-        "bookingId": booking["id"],
-        "pnr": booking.get("pnr"),
-        "userId": booking.get("user_id"),
-        "state": booking["state"],
-        "productType": booking["product_type"],
-        "totalCents": booking["total_cents"],
-        "currency": booking["currency"],
-        "contactEmail": booking["contact_email"],
-        "origin": metadata.get("origin"),
-        "destination": metadata.get("destination"),
-        "departDate": metadata.get("departDate"),
-    }
 
 
 def _public(

@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+tests/
+pytest.ini
+requirements.in
+requirements-dev.in
+requirements-dev.txt

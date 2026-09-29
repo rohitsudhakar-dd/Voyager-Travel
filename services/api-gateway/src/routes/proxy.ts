@@ -7,9 +7,13 @@
  * every trace ambiguous about which shape it was.
  */
 
+import { Readable } from 'node:stream';
+import type * as StreamWeb from 'node:stream/web';
+
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { principalOf, requirePrincipal } from '../auth';
+import { config } from '../config';
 import { ValidationError } from '../errors';
 import { callService, type Upstream } from '../http';
 import type { Deps } from '../deps';
@@ -179,7 +183,7 @@ export function registerProxyRoutes(app: FastifyInstance, _deps: Deps): void {
     const principal = principalOf(request);
     return forward(request, reply, 'aiSupport', {
       method: 'POST',
-      path: '/v1/conversations',
+      path: '/v1/support/conversations',
       body: { ...(request.body as Record<string, unknown>), userId: principal?.id ?? null },
     });
   });
@@ -187,8 +191,53 @@ export function registerProxyRoutes(app: FastifyInstance, _deps: Deps): void {
   app.get('/api/v1/support/conversations/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
     return forward(request, reply, 'aiSupport', {
-      path: `/v1/conversations/${encodeURIComponent(id)}`,
+      path: `/v1/support/conversations/${encodeURIComponent(id)}`,
     });
+  });
+
+  /**
+   * The SSE turn (§ 2.7).
+   *
+   * This is the one route that cannot go through `callService`, which buffers
+   * the whole response: a chat that only appears once the model has finished
+   * is not a streaming chat. The body is piped through untouched so the
+   * browser sees tokens as ai-support-service produces them.
+   */
+  app.post('/api/v1/support/conversations/:id/messages', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const url = new URL(
+      `/v1/support/conversations/${encodeURIComponent(id)}/messages`,
+      config.upstreams.aiSupport,
+    );
+
+    const upstream = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'text/event-stream',
+        'x-request-id': request.id,
+        ...(request.headers.authorization
+          ? { authorization: request.headers.authorization }
+          : {}),
+      },
+      body: JSON.stringify(request.body ?? {}),
+    });
+
+    if (!upstream.ok || !upstream.body) {
+      const text = await upstream.text();
+      reply.code(upstream.status).type('application/json');
+      return text || { error: { type: 'UpstreamError', message: 'No response.' } };
+    }
+
+    reply
+      .code(200)
+      .header('content-type', 'text/event-stream')
+      .header('cache-control', 'no-cache')
+      // Without this, a buffering proxy holds the whole stream and delivers it
+      // at the end, which looks exactly like the feature not working.
+      .header('x-accel-buffering', 'no');
+
+    return reply.send(Readable.fromWeb(upstream.body as StreamWeb.ReadableStream));
   });
 }
 

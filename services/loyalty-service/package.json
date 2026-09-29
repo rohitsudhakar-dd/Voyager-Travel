@@ -1,0 +1,31 @@
+{
+  "name": "loyalty-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Points accrual and tier calculation for Voyager",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=20.17"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "fastify": "4.28.1",
+    "ioredis": "5.4.1",
+    "kafkajs": "2.2.4",
+    "pg": "8.13.0",
+    "pino": "9.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.16.10",
+    "@types/pg": "8.11.10",
+    "tsx": "4.19.1",
+    "typescript": "5.6.2",
+    "vitest": "2.1.1"
+  }
+}

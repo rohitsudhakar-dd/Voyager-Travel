@@ -54,3 +54,36 @@ def build(
         "correlationId": correlation_id,
         "payload": payload,
     }
+
+
+def booking_payload(booking: dict) -> dict[str, Any]:
+    """The body every `booking.*` event carries.
+
+    One function, because there were two: the router's and the payment
+    consumer's. They drifted, and the consequence was loyalty-service earning
+    points on the gross total at the base rate for every confirmed booking --
+    a wrong number that nothing failed on.
+
+    The money is broken out rather than summed: loyalty earns on fare and
+    ancillaries but not on taxes, and `fareClassCode` selects the
+    `fare_classes.points_multiplier`.
+    """
+    metadata = booking.get("metadata") or {}
+    return {
+        "bookingId": booking["id"],
+        "pnr": booking.get("pnr"),
+        "userId": booking.get("user_id"),
+        "state": booking["state"],
+        "productType": booking["product_type"],
+        "subtotalCents": booking["subtotal_cents"],
+        "taxesCents": booking["taxes_cents"],
+        "ancillariesCents": booking["ancillaries_cents"],
+        "totalCents": booking["total_cents"],
+        "fareClassCode": metadata.get("fareClassCode"),
+        "currency": booking["currency"],
+        "contactEmail": booking["contact_email"],
+        "origin": metadata.get("origin"),
+        "destination": metadata.get("destination"),
+        "departDate": metadata.get("departDate"),
+        "cabin": metadata.get("cabin"),
+    }

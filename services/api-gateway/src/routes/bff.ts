@@ -143,6 +143,9 @@ export function registerBffRoutes(app: FastifyInstance, deps: Deps): void {
         body: {
           userId: principal?.id ?? null,
           amountCents: held.body.totalCents,
+          // Broken out so the quote excludes taxes, which never earn.
+          taxesCents: held.body.taxesCents,
+          fareClassCode: (held.body.metadata as Record<string, unknown>)?.fareClassCode,
           currency: held.body.currency,
         },
         requestId: request.id,

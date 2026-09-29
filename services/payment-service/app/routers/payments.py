@@ -225,11 +225,20 @@ async def refund(payment_id: str, body: Refund) -> dict:
             provider_payload=provider,
         )
 
+    # A refund is the one payment outcome that always ends in an email, and
+    # the address lives on the booking. Refunds are rare enough that one read
+    # here costs nothing worth saving.
+    booking = await _fetch_booking(payment["booking_id"])
+
     await runtime.producer.send(
         envelope.TOPIC_PAYMENTS,
         payment["booking_id"],
         "payment.refunded",
-        {**_event_payload(payment), "refundedCents": total_refunded, "full": full},
+        {
+            **_event_payload(payment, booking),
+            "refundedCents": total_refunded,
+            "full": full,
+        },
         correlation_id=current_request_id(),
     )
     log.info(
@@ -410,7 +419,7 @@ async def _publish_result(payment: dict, booking: dict) -> None:
             envelope.TOPIC_PAYMENTS,
             payment["booking_id"],
             "payment.authorized",
-            _event_payload(payment),
+            _event_payload(payment, booking),
             correlation_id=current_request_id(),
         )
         await runtime.producer.send(
@@ -429,10 +438,12 @@ async def _publish_result(payment: dict, booking: dict) -> None:
             correlation_id=current_request_id(),
         )
     elif payment["state"] == PaymentState.DECLINED:
-        await _publish_failure(payment, reason="declined")
+        await _publish_failure(payment, reason="declined", booking=booking)
 
 
-async def _publish_failure(payment: dict, *, reason: str) -> None:
+async def _publish_failure(
+    payment: dict, *, reason: str, booking: dict | None = None
+) -> None:
     """A decline and a provider error are different events.
 
     booking-service treats both as `PENDING_PAYMENT -> FAILED`, but the event
@@ -442,7 +453,7 @@ async def _publish_failure(payment: dict, *, reason: str) -> None:
         envelope.TOPIC_PAYMENTS,
         payment["booking_id"],
         "payment.declined" if reason == "declined" else "payment.failed",
-        {**_event_payload(payment), "reason": reason},
+        {**_event_payload(payment, booking), "reason": reason},
         correlation_id=current_request_id(),
     )
 
@@ -556,10 +567,16 @@ def _log_fields(payment: dict) -> dict:
     }
 
 
-def _event_payload(payment: dict) -> dict:
+def _event_payload(payment: dict, booking: dict | None = None) -> dict:
     return {
         "paymentId": payment["id"],
         "bookingId": payment["booking_id"],
+        # notification-worker has no database, so an event with no address is
+        # an event it can only drop. Every publisher that leads to an email
+        # passes the booking; the rest leave these null rather than adding an
+        # HTTP call to a path that does not need one.
+        "contactEmail": (booking or {}).get("contactEmail"),
+        "pnr": (booking or {}).get("pnr"),
         "state": payment["state"],
         "amountCents": payment["amount_cents"],
         "currency": payment["currency"],

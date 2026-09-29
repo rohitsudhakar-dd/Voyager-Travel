@@ -40,7 +40,11 @@ export const PREFERRED_TOOL: Record<Intent, string | null> = {
 };
 
 const PNR_PATTERN = /\b([A-HJ-NP-Z2-9]{6})\b/;
-const LAST_NAME_PATTERN = /(?:name(?: is)?|surname|last name)[:\s]+([A-Za-z][A-Za-z'-]+)/i;
+// The longest alternative first, and the optional " is" applied after all of
+// them. Ordered the other way, "my last name is Lovelace" matches the bare
+// `name`, then captures "is" as the surname.
+const LAST_NAME_PATTERN =
+  /(?:last\s+name|surname|name)(?:\s+is)?[:\s]+([A-Za-z][A-Za-z'-]+)/i;
 const BOOKING_ID_PATTERN = /\b(?:booking(?:[ _-]?id)?)[:\s]+([0-9a-f-]{8,36})\b/i;
 
 /** Pull whatever the tool call needs out of the user's own words. */

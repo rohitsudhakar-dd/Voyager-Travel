@@ -48,6 +48,19 @@ services:
     ports:
       - "127.0.0.1:4040:4040"
 
+  loyalty-service:
+    ports:
+      - "127.0.0.1:4050:4050"
+
+  # Health only; notification-worker's real interface is the consumer group.
+  notification-worker:
+    ports:
+      - "127.0.0.1:4060:4060"
+
+  ai-support-service:
+    ports:
+      - "127.0.0.1:4070:4070"
+
   # The mocks are published so you can curl a provider directly while
   # debugging, without going through search-service.
   mock-gds:

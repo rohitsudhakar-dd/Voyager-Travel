@@ -1,0 +1,12 @@
+# Test and lint dependencies, compiled to requirements-dev.txt the same way as
+# requirements.txt. Kept out of the image by .dockerignore.
+#
+# 02-TECH-STACK.md § 4.3 names the tools but pins no versions for them, so these
+# are pinned here.
+
+-r requirements.in
+
+pytest~=8.3.0
+pytest-asyncio~=0.24.0
+ruff~=0.6.0
+mypy~=1.11.0

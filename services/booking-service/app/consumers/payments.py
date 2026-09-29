@@ -126,7 +126,7 @@ async def confirm(booking_id: str, *, correlation_id: str = "") -> dict:
         envelope.TOPIC_BOOKINGS,
         booking_id,
         "booking.confirmed",
-        _payload(booking),
+        envelope.booking_payload(booking),
         correlation_id=correlation_id,
     )
     await runtime.producer.send(
@@ -194,24 +194,6 @@ async def refund(booking_id: str, *, correlation_id: str = "") -> dict:
         "Booking refunded", booking={"id": booking_id, "state": booking["state"]}
     )
     return booking
-
-
-def _payload(booking: dict) -> dict:
-    metadata = booking.get("metadata") or {}
-    return {
-        "bookingId": booking["id"],
-        "pnr": booking.get("pnr"),
-        "userId": booking.get("user_id"),
-        "state": booking["state"],
-        "productType": booking["product_type"],
-        "totalCents": booking["total_cents"],
-        "currency": booking["currency"],
-        "contactEmail": booking["contact_email"],
-        "origin": metadata.get("origin"),
-        "destination": metadata.get("destination"),
-        "departDate": metadata.get("departDate"),
-        "cabin": metadata.get("cabin"),
-    }
 
 
 __all__ = ["run", "confirm", "fail", "refund", "CONSUMER_GROUP", "BookingState"]
