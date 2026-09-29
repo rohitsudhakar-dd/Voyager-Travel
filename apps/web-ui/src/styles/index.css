@@ -1,0 +1,69 @@
+@import './tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-bg text-fg font-sans text-body-md antialiased;
+    /* 04-STYLING.md § "Responsive": no horizontal scroll on the body at any width. */
+    overflow-x: hidden;
+  }
+
+  /* Never `outline: none` without a replacement (04-STYLING.md § 7). */
+  :focus-visible {
+    outline: 2px solid var(--v-brand-500);
+    outline-offset: 2px;
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  /* Colour is inherited on purpose: headings inside an inverse surface (the
+     home hero, the ops console) must not be pinned back to --v-fg. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    text-wrap: balance;
+  }
+}
+
+@layer components {
+  /* Prices, times and durations. Digits that change width look broken. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .v-skeleton {
+    background-image: linear-gradient(
+      90deg,
+      var(--v-bg-sunken) 0%,
+      var(--v-border) 40%,
+      var(--v-bg-sunken) 80%
+    );
+    background-size: 200% 100%;
+    @apply animate-shimmer;
+  }
+
+  /* Keeps long result lists off the main-thread rendering budget. The
+     contain-intrinsic-size must be set or the scrollbar jumps. */
+  .v-deferred-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 96px;
+  }
+
+  .v-skip-link {
+    @apply sr-only;
+  }
+
+  .v-skip-link:focus {
+    @apply not-sr-only fixed left-4 top-4 z-50 rounded-md bg-brand-600 px-4 py-2 text-body-md font-semibold text-white;
+  }
+}

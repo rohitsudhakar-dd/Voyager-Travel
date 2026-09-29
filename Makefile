@@ -21,7 +21,7 @@ export DD_GIT_REPOSITORY_URL ?= $(shell git config --get remote.origin.url 2>/de
 # `s=` selects a single service for the targets that take one.
 s ?=
 
-.PHONY: help bootstrap build up up-full up-one down nuke seed seed-verify reset \
+.PHONY: help bootstrap build up up-full up-one web-ui down nuke seed seed-verify reset \
         logs migrate healthcheck chaos chaos-reset scenario scenarios \
         dd-apply dd-sourcemaps demo-mode idle-mode test verify deploy ps
 
@@ -57,6 +57,11 @@ build: ## Build all images
 up: ## Start the data layer, services, and the Datadog Agent
 	$(COMPOSE) up -d
 	@$(MAKE) --no-print-directory ps
+
+web-ui: ## Run the frontend dev server with the browser fixture layer (no backend needed)
+	docker run --rm -it -p 5173:5173 \
+		-v "$(PWD)/apps/web-ui":/app -v "$(PWD)/packages":/packages -w /app \
+		node:20.17-alpine sh -c "npm install && npm run dev -- --host 0.0.0.0"
 
 up-full: ## up + the k6 and Playwright load generators
 	@echo "not yet implemented (phase 11)"

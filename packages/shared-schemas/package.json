@@ -1,0 +1,15 @@
+{
+  "name": "@voyager/shared-schemas",
+  "version": "1.0.0",
+  "private": true,
+  "description": "zod schemas shared by web-ui and api-gateway",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "zod": "3.23.8"
+  }
+}

@@ -1,0 +1,46 @@
+# Applies only to builds that use the repository root as their context, which
+# today is web-ui alone: every other service builds from its own directory.
+#
+# Without this the daemon uploads 1.1 GB for an image whose inputs are about
+# 4 MB. This Docker install has no buildx, so a per-Dockerfile ignore file is
+# not honoured and the exclusions have to live here.
+
+.git
+.github
+
+# Build inputs are the lockfiles and src; installed trees and build output are
+# produced inside the image and must never be copied in from the host, where
+# they may carry the wrong architecture's binaries.
+**/node_modules
+**/dist
+**/.vite
+**/coverage
+**/playwright-report
+**/test-results
+
+# Go and Python build artefacts.
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.venv
+
+# Secrets. .env is gitignored; it must not reach a build layer either.
+.env
+.env.*
+!apps/web-ui/.env.development
+!apps/web-ui/.env.live
+!apps/web-ui/.env.production
+
+# Nothing outside apps/ and packages/ is an input to the frontend build.
+infra
+mocks
+scripts
+services
+tools
+db
+docs
+
+*.md
+docker-compose*.yml
+Makefile
+.DS_Store

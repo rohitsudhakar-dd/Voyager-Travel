@@ -34,8 +34,15 @@ export function registerReferenceRoutes(app: FastifyInstance, deps: Deps): void 
             OR a.name ILIKE '%' || $1 || '%'
          -- An exact code first, then a city match, then anything else: typing
          -- "lon" should offer London before Long Beach.
-         ORDER BY (a.iata_code ILIKE $1) DESC,
-                  (c.name ILIKE $1 || '%') DESC,
+         --
+         -- NULLS LAST on the city clause is load-bearing. The join is a LEFT
+         -- join, so an airport with no city row makes that expression NULL,
+         -- and a DESC sort puts NULLs first by default -- which ranked
+         -- "Barcelonnette" and "Palonegro" above London Heathrow for "LON",
+         -- purely because they have no city and matched on the name
+         -- substring.
+         ORDER BY (a.iata_code ILIKE $1) DESC NULLS LAST,
+                  (c.name ILIKE $1 || '%') DESC NULLS LAST,
                   c.popularity_rank NULLS LAST,
                   a.iata_code
          LIMIT $2`,

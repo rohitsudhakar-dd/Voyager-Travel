@@ -662,6 +662,51 @@ services:
       start_period: 15s
     mem_limit: 512m
 
+
+  # ------------------------------------------------------------ frontend --
+
+  web-ui:
+    build:
+      context: .
+      dockerfile: apps/web-ui/Dockerfile
+      args:
+        <<: *sci-args
+        DD_ENV: ${DD_ENV:-demo}
+        DD_VERSION: ${DD_VERSION:-dev}
+        # Baked in, not passed at runtime: Vite substitutes every VITE_* value
+        # at build time, so a container started with a different one serves
+        # the old value and looks like a caching bug.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+        VITE_USE_MOCKS: ${VITE_USE_MOCKS:-false}
+        VITE_DD_SITE: ${DD_SITE:-datadoghq.com}
+        # VITE_DD_ENV, VITE_DD_VERSION and VITE_DD_GIT_COMMIT_SHA are derived
+        # in the Dockerfile from DD_ENV, DD_VERSION and DD_GIT_COMMIT_SHA
+        # above. Passing them here as well would give one value two sources
+        # that can disagree.
+    container_name: web-ui
+    hostname: web-ui
+    restart: unless-stopped
+    networks: [voyager]
+    # No depends_on: the static assets must be servable whether or not the
+    # gateway is healthy, because "the API is down" is a screen the demo
+    # needs to be able to show.
+    environment:
+      # There is no tracer in this image. These exist so the Agent's container
+      # tagging files the browser's own logs and RUM under the same service.
+      DD_SERVICE: voyager-web
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+    healthcheck:
+      # 127.0.0.1, not localhost: busybox wget resolves localhost to ::1 and
+      # nginx here listens on IPv4 only, so the name form reports unhealthy
+      # while the server is serving perfectly well.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    mem_limit: 128m
+
   # -------------------------------------------------------------- datadog --
 
   datadog-agent:

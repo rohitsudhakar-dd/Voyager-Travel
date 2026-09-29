@@ -1,0 +1,68 @@
+{
+  "name": "voyager-web-ui",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Voyager storefront and Ops console (React + Vite SPA)",
+  "type": "module",
+  "engines": {
+    "node": ">=20.17"
+  },
+  "scripts": {
+    "assets": "node scripts/generate-assets.mjs",
+    "dev": "npm run assets && vite",
+    "dev:live": "npm run assets && vite --mode live",
+    "build": "npm run assets && tsc -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "3.9.0",
+    "@tanstack/react-query": "5.56.2",
+    "clsx": "2.1.1",
+    "date-fns": "3.6.0",
+    "lucide-react": "0.446.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-hook-form": "7.53.0",
+    "react-router-dom": "6.26.2",
+    "recharts": "2.12.7",
+    "tailwind-merge": "2.5.2",
+    "zod": "3.23.8",
+    "zustand": "4.5.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.50.1",
+    "@tailwindcss/forms": "0.5.9",
+    "@testing-library/jest-dom": "6.5.0",
+    "@testing-library/react": "16.0.1",
+    "@testing-library/user-event": "14.5.2",
+    "@types/node": "20.16.10",
+    "@types/react": "18.3.11",
+    "@types/react-dom": "18.3.0",
+    "@typescript-eslint/eslint-plugin": "8.8.0",
+    "@typescript-eslint/parser": "8.8.0",
+    "@vitejs/plugin-react": "4.3.2",
+    "autoprefixer": "10.4.20",
+    "eslint": "8.57.1",
+    "eslint-plugin-react-hooks": "4.6.2",
+    "eslint-plugin-react-refresh": "0.4.12",
+    "jsdom": "25.0.1",
+    "msw": "2.4.9",
+    "postcss": "8.4.47",
+    "prettier": "3.3.3",
+    "tailwindcss": "3.4.13",
+    "typescript": "5.5.4",
+    "vite": "5.4.8",
+    "vitest": "2.1.1"
+  },
+  "msw": {
+    "workerDirectory": [
+      "public"
+    ]
+  }
+}

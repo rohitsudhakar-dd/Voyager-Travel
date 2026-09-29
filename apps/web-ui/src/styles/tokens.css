@@ -1,0 +1,127 @@
+/**
+ * Voyager design tokens -- 04-STYLING.md § 2.
+ *
+ * This is the only file in the app allowed to contain a hex value. Components
+ * reference the Tailwind names that map onto these variables, which is what
+ * lets `[data-theme="dark"]` and `[data-theme="ops"]` repaint the whole UI
+ * without touching a single class.
+ */
+
+:root {
+  /* Brand -- deep ocean blue. Trustworthy, travel-adjacent, not a copy of anyone. */
+  --v-brand-50: #eef4ff;
+  --v-brand-100: #d9e5ff;
+  --v-brand-200: #bcd2ff;
+  --v-brand-300: #8eb4ff;
+  --v-brand-400: #598bfd;
+  --v-brand-500: #3565f4;
+  --v-brand-600: #2149e0; /* primary action */
+  --v-brand-700: #1b3ab6;
+  --v-brand-800: #1c3390;
+  --v-brand-900: #1c2f72;
+
+  /* Accent -- warm amber. Prices, deals, loyalty. Used sparingly. */
+  --v-accent-50: #fff8ed;
+  --v-accent-100: #ffefd4;
+  --v-accent-300: #fdc069;
+  --v-accent-500: #f79009;
+  --v-accent-600: #dc6803;
+  --v-accent-700: #b54708;
+
+  /* Neutrals -- slightly cool grey */
+  --v-neutral-0: #ffffff;
+  --v-neutral-25: #fcfcfd;
+  --v-neutral-50: #f8f9fc;
+  --v-neutral-100: #f1f3f9;
+  --v-neutral-200: #e4e7ef;
+  --v-neutral-300: #ced3e0;
+  --v-neutral-400: #98a2b3;
+  --v-neutral-500: #667085;
+  --v-neutral-600: #475467;
+  --v-neutral-700: #344054;
+  --v-neutral-800: #1d2939;
+  --v-neutral-900: #101828;
+
+  /* Semantic */
+  --v-success-50: #ecfdf3;
+  --v-success-500: #12b76a;
+  --v-success-700: #027a48;
+  --v-warning-50: #fffaeb;
+  --v-warning-500: #f79009;
+  --v-warning-700: #b54708;
+  --v-danger-50: #fef3f2;
+  --v-danger-500: #f04438;
+  --v-danger-700: #b42318;
+  --v-info-50: #eff8ff;
+  --v-info-500: #2e90fa;
+  --v-info-700: #175cd3;
+
+  /* Applied roles */
+  --v-bg: var(--v-neutral-50);
+  --v-bg-elevated: var(--v-neutral-0);
+  --v-bg-sunken: var(--v-neutral-100);
+  --v-border: var(--v-neutral-200);
+  --v-border-strong: var(--v-neutral-300);
+  --v-text: var(--v-neutral-900);
+  --v-text-muted: var(--v-neutral-500);
+  --v-text-inverse: var(--v-neutral-0);
+
+  --v-radius-sm: 6px;
+  --v-radius-md: 10px;
+  --v-radius-lg: 14px;
+  --v-radius-xl: 20px;
+  --v-radius-full: 9999px;
+
+  --v-shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --v-shadow-sm: 0 1px 3px rgba(16, 24, 40, 0.1), 0 1px 2px rgba(16, 24, 40, 0.06);
+  --v-shadow-md: 0 4px 8px -2px rgba(16, 24, 40, 0.1), 0 2px 4px -2px rgba(16, 24, 40, 0.06);
+  --v-shadow-lg: 0 12px 16px -4px rgba(16, 24, 40, 0.08), 0 4px 6px -2px rgba(16, 24, 40, 0.03);
+  --v-shadow-xl: 0 20px 24px -4px rgba(16, 24, 40, 0.08), 0 8px 8px -4px rgba(16, 24, 40, 0.03);
+
+  --v-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --v-ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --v-dur-fast: 120ms;
+  --v-dur-normal: 200ms;
+  --v-dur-slow: 320ms;
+}
+
+/* Customer-side dark mode. Only the applied-role variables are redefined. */
+[data-theme='dark'] {
+  --v-bg: #0f1420;
+  --v-bg-elevated: #171d2b;
+  --v-bg-sunken: #0a0e17;
+  --v-border: #252d3e;
+  --v-border-strong: #364259;
+  --v-text: #e8ecf4;
+  --v-text-muted: #94a0b8;
+}
+
+/* Voyager Ops. Scoped to the /admin subtree so it can never leak into the
+   storefront -- nobody should confuse the chaos panel for the shop. */
+[data-theme='ops'] {
+  --v-bg: #0b0f1a;
+  --v-bg-elevated: #141a29;
+  --v-bg-sunken: #070a12;
+  --v-border: #232b3d;
+  --v-border-strong: #33405c;
+  --v-text: #e6eaf2;
+  --v-text-muted: #8b95ad;
+
+  /* Ops accent -- violet, so the chaos panel never reads as the storefront */
+  --v-brand-600: #7c5cfc;
+  --v-brand-500: #9277ff;
+  --v-brand-700: #6240e0;
+
+  /* Status colours run hotter in the dark UI */
+  --v-success-500: #32d583;
+  --v-warning-500: #fdb022;
+  --v-danger-500: #ff6b5e;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --v-dur-fast: 1ms;
+    --v-dur-normal: 1ms;
+    --v-dur-slow: 1ms;
+  }
+}
