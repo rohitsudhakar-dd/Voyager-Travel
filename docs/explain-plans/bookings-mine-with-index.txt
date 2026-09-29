@@ -1,0 +1,22 @@
+# GET /bookings/mine -- baseline plan WITH idx_bookings_user_id_created_at
+#
+# Captured at the end of phase 1 against 400,000 seeded bookings, signed in
+# as power1@voyager.demo. Phase 10 compares this against the plan produced
+# with chaos flag db_drop_index=true, where it must flip to a Seq Scan.
+#
+# Query: SELECT * FROM voyager.bookings WHERE user_id = <power1>
+#        ORDER BY created_at DESC LIMIT 20
+
+Limit  (cost=2.92..25.76 rows=20 width=277) (actual time=0.042..0.116 rows=20 loops=1)
+  Buffers: shared hit=26
+  InitPlan 1 (returns $0)
+    ->  Index Scan using users_email_key on users  (cost=0.29..2.50 rows=1 width=16) (actual time=0.015..0.015 rows=1 loops=1)
+          Index Cond: (email = 'power1@voyager.demo'::text)
+          Buffers: shared hit=3
+  ->  Index Scan using idx_bookings_user_id_created_at on bookings  (cost=0.42..51.81 rows=45 width=277) (actual time=0.041..0.114 rows=20 loops=1)
+        Index Cond: (user_id = $0)
+        Buffers: shared hit=26
+Planning:
+  Buffers: shared hit=285
+Planning Time: 0.332 ms
+Execution Time: 0.131 ms

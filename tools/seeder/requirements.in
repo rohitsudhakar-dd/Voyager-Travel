@@ -1,0 +1,18 @@
+# Direct dependencies for the seeder one-shot job.
+# requirements.txt is generated with pip-compile -- do not edit it by hand.
+
+# psycopg 3 is used for its COPY FROM STDIN support; the seeder writes well
+# over a million rows and ORM round-trips would not finish in the 5-minute
+# budget (01-PRD.md § 12).
+psycopg[binary]~=3.2.0
+
+# Real IATA codes with real city, country, coordinate and timezone data, so
+# the reference tables are not invented (01-PRD.md § 9). Airlines and hotels
+# stay fictional.
+# Calendar-versioned, so a floor rather than a compatible-release specifier.
+# pip-compile pins the exact release in requirements.txt.
+airportsdata>=20240901
+
+# Password hashing for the seeded accounts, at the same cost factor the
+# gateway uses.
+bcrypt~=4.2.0

@@ -14,9 +14,9 @@ DATA_LAYER   := postgres redis kafka
 # `s=` selects a single service for the targets that take one.
 s ?=
 
-.PHONY: help bootstrap build up up-full up-one down nuke seed reset logs migrate \
-        healthcheck chaos-reset scenario dd-apply dd-sourcemaps demo-mode idle-mode \
-        test deploy ps
+.PHONY: help bootstrap build up up-full up-one down nuke seed seed-verify reset \
+        logs migrate healthcheck chaos-reset scenario dd-apply dd-sourcemaps \
+        demo-mode idle-mode test deploy ps
 
 help: ## List available targets
 	@echo "Voyager -- make targets"
@@ -74,13 +74,20 @@ logs: ## Tail one service: make logs s=booking
 # ------------------------------------------------------------------- data --
 
 migrate: ## Run Alembic migrations (booking-service owns the schema)
-	@echo "not yet implemented (phase 1)"
+	$(COMPOSE) run --rm --no-deps booking-service alembic upgrade head
 
-seed: ## Run the seeder job
-	@echo "not yet implemented (phase 1)"
+seed: ## Run the seeder job (truncate-then-load, deterministic)
+	$(COMPOSE) --profile tools run --rm seeder --yes
 
-reset: ## nuke + up + migrate + seed + chaos-reset -- the "make it clean" button
-	@echo "not yet implemented (phase 1)"
+seed-verify: ## Re-run the seed exit-criteria checks without reloading
+	$(COMPOSE) --profile tools run --rm seeder --verify-only
+
+reset: ## nuke + up + migrate + seed -- the "make it clean" button
+	@$(MAKE) --no-print-directory nuke
+	@$(MAKE) --no-print-directory up
+	@$(MAKE) --no-print-directory migrate
+	@$(MAKE) --no-print-directory seed
+	@$(MAKE) --no-print-directory chaos-reset
 
 # ------------------------------------------------------------------ chaos --
 

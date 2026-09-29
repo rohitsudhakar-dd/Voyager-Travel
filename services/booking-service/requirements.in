@@ -1,0 +1,17 @@
+# Direct dependencies for booking-service. Versions track 02-TECH-STACK.md § 4.3.
+# requirements.txt is generated from this file with pip-compile -- never edit it
+# by hand (02-TECH-STACK.md § 12, rule 2).
+#
+# Datadog packages (ddtrace, datadog) are deliberately absent until Phase 8.
+
+fastapi~=0.115.0
+uvicorn[standard]~=0.30.0
+pydantic~=2.9.0
+pydantic-settings~=2.5.0
+sqlalchemy[asyncio]~=2.0.0
+asyncpg~=0.29.0
+alembic~=1.13.0
+redis~=5.0.0
+aiokafka~=0.11.0
+httpx~=0.27.0
+structlog~=24.4.0

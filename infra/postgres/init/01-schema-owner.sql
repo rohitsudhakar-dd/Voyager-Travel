@@ -6,7 +6,9 @@ CREATE SCHEMA IF NOT EXISTS voyager;
 
 -- pg_stat_statements is preloaded in postgresql.conf; the extension itself has
 -- to be created in the database before Database Monitoring can read it.
-CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+-- It belongs in public, not in voyager: the application schema is owned by
+-- Alembic, and the monitoring role should not depend on it being on the path.
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements SCHEMA public;
 
 DO $$
 BEGIN

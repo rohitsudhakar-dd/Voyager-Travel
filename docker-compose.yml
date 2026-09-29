@@ -22,6 +22,24 @@ volumes:
   kafkadata:
     name: voyager_kafkadata
 
+# Connection details shared by every service that talks to the data layer.
+x-data-env: &data-env
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: ${POSTGRES_USER:-voyager}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required -- see .env.example}
+  POSTGRES_DB: ${POSTGRES_DB:-voyager}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+  KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+
+x-data-layer-ready: &data-layer-ready
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  kafka:
+    condition: service_healthy
+
 services:
   postgres:
     image: postgres:16.4
@@ -121,3 +139,46 @@ services:
       retries: 10
       start_period: 40s
     mem_limit: 2g
+
+  # ------------------------------------------------------------- services --
+
+  booking-service:
+    build:
+      context: ./services/booking-service
+    container_name: booking-service
+    hostname: booking-service
+    restart: unless-stopped
+    networks: [voyager]
+    depends_on: *data-layer-ready
+    environment:
+      <<: *data-env
+      DD_SERVICE: voyager-booking
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4030/health').read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    mem_limit: 512m
+
+  # ----------------------------------------------------------------- jobs --
+  # Profiled out of `make up`; run explicitly by `make seed`.
+
+  seeder:
+    build:
+      context: ./tools/seeder
+    container_name: seeder
+    profiles: ["tools"]
+    networks: [voyager]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *data-env
+      DD_SERVICE: voyager-seeder
+      DD_ENV: ${DD_ENV:-demo}
+      SEED_RANDOM_SEED: ${SEED_RANDOM_SEED:-20260101}
+      SEED_ANCHOR_DATE: ${SEED_ANCHOR_DATE:-}
+    mem_limit: 1g
