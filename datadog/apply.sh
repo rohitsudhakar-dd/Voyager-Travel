@@ -72,6 +72,36 @@ if [[ $dry_run == false ]]; then
     echo "It must match the org the keys belong to: datadoghq.com, datadoghq.eu, us5.datadoghq.com, ..." >&2
     exit 1
   fi
+
+  # Both keys are fixed-length lowercase hex. Checking that here turns the
+  # commonest paste mistake into a sentence that names it, instead of an HTTP
+  # 401 whose own wording blames the API key -- which sends an operator to
+  # rotate the one credential that was never wrong. The key itself is never
+  # echoed; only its length and whether it is hex.
+  key_shape() {
+    local name=$1 value=$2 want=$3
+    if [[ ${#value} -ne $want ]]; then
+      echo "$name is ${#value} characters; a Datadog $4 is $want." >&2
+      return 1
+    fi
+    if [[ ! $value =~ ^[0-9a-f]+$ ]]; then
+      echo "$name is the right length but is not lowercase hexadecimal." >&2
+      echo "That usually means the value came from the key list rather than the" >&2
+      echo "key itself -- the list shows a masked form. Reveal the full key and" >&2
+      echo "copy that." >&2
+      return 1
+    fi
+  }
+
+  shape_ok=true
+  key_shape DD_API_KEY "$DD_API_KEY" 32 "API key" || shape_ok=false
+  key_shape DD_APP_KEY "$DD_APP_KEY" 40 "application key" || shape_ok=false
+  if [[ $shape_ok == false ]]; then
+    echo >&2
+    echo "Application keys live under Organisation Settings -> Application Keys," >&2
+    echo "which is a different page from API Keys." >&2
+    exit 1
+  fi
 fi
 
 # Bash owns the operator contract above -- arguments, key discovery, the error

@@ -17,6 +17,7 @@ from app.config import get_settings
 from app.consumers import payments as payments_consumer
 from app.health import router as health_router
 from app.kafka.producer import Producer
+from app.lockstorm import run as run_lock_storm
 from app.middleware import RequestContextMiddleware
 from app.routers.bookings import router as bookings_router
 from app.state import runtime
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(payments_consumer.run(settings.kafka_brokers, stop)),
         asyncio.create_task(run_sweeper(stop)),
         asyncio.create_task(_watch_pool_chaos(stop)),
+        asyncio.create_task(run_lock_storm(stop)),
     ]
 
     log.info(

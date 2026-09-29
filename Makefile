@@ -49,9 +49,9 @@ endif
 s ?=
 
 .PHONY: help bootstrap build up up-full up-one web-ui down nuke seed seed-verify reset \
-        logs migrate healthcheck chaos chaos-reset scenario scenarios \
+        logs migrate dbm-setup healthcheck chaos chaos-reset scenario scenarios \
         dd-apply dd-sourcemaps demo-mode idle-mode test verify verify-tracing verify-streams deploy ps \
-        test-web test-node test-python test-go verify-edge verify-llmobs
+        test-web test-node test-python test-go verify-edge verify-llmobs verify-dbm
 
 help: ## List available targets
 	@echo "Voyager -- make targets"
@@ -130,6 +130,17 @@ seed: ## Run the seeder job (truncate-then-load, deterministic)
 seed-verify: ## Re-run the seed exit-criteria checks without reloading
 	$(COMPOSE) --profile tools run --rm seeder --verify-only
 
+dbm-setup: ## Create the datadog role, grants and explain function (idempotent)
+	@# infra/postgres/init runs once, on first initialisation of the volume.
+	@# A stack that predates 03-datadog.sql -- which is every stack upgraded
+	@# rather than rebuilt -- never sees it, and the Postgres check then fails
+	@# authentication with no hint as to why. The file is written to be safe to
+	@# run twice so this target can simply apply it.
+	@set -a; . ./.env; set +a; \
+	$(COMPOSE) exec -T -e DD_PG_PASSWORD="$$DD_PG_PASSWORD" postgres \
+		psql -v ON_ERROR_STOP=1 -U "$${POSTGRES_USER:-voyager}" -d "$${POSTGRES_DB:-voyager}" \
+		-f /docker-entrypoint-initdb.d/03-datadog.sql
+
 reset: ## nuke + up + migrate + seed -- the "make it clean" button
 	@$(MAKE) --no-print-directory nuke
 	@$(MAKE) --no-print-directory up
@@ -200,14 +211,23 @@ verify: ## Run the phase exit-criteria scripts against a running stack
 verify-tracing: ## Phase 8 exit criteria (stops and restarts services; takes minutes)
 	@./scripts/verify-tracing.sh
 
+verify-dbm: ## Phase 10 DBM exit criteria (drops an index and restores it; ~3 min)
+	@./scripts/verify-dbm.sh
+
 verify-llmobs: ## Phase 10 LLM Observability (stops ai-support-service; sets chaos)
 	@./scripts/verify-llmobs.sh
+
+verify-metrics: ## Phase 10 § 14 business metrics (pauses loadgen, books four times; ~6 min)
+	@./scripts/verify-metrics.sh
 
 verify-streams: ## Phase 10 Data Streams and Kafka chaos (pauses a consumer group; takes minutes)
 	@./scripts/verify-streams.sh
 
 verify-edge: ## Phase 13 exit criteria for the edge proxy and port exposure
 	@./scripts/verify-edge.sh
+
+verify-rum: ## Phase 9 exit criteria (drives one real browser session; sets chaos)
+	@./scripts/verify-rum.sh
 
 deploy: ## Pull, stamp DD_VERSION, build, rolling restart, migrate, healthcheck
 	@./infra/ec2/deploy.sh

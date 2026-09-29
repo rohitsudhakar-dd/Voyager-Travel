@@ -1,0 +1,52 @@
+# GET /bookings/mine -- the same query with chaos flag db_drop_index=true
+#
+# The counterpart to bookings-mine-with-index.txt, captured against the same
+# 400,000 seeded bookings as power1@voyager.demo, and the phase 10 exit
+# criterion that the plan flips from Index Scan to Seq Scan.
+#
+# Read the two together. The index turns "find this user's rows" into a seek;
+# without it Postgres reads all 400,000 rows, discards 133,359 per worker, and
+# sorts what is left -- which is why the row the plan removes by filter is the
+# number worth quoting in a demo, not the execution time.
+#
+# Execution time here (21 ms) is a warm, fully-cached figure on a 6-CPU host:
+# the table is 90 MB against 1 GB of shared_buffers, so this is the *cheap*
+# version of the pathology. The first, cold run of the same plan measured
+# 152 ms. Either way the statement itself goes from 0.05 ms to 14-21 ms --
+# between 280x and 400x -- which is the number Database Monitoring shows.
+#
+# The endpoint does not move nearly that far. GET /bookings/mine goes from
+# roughly 8 ms to 21 ms at p95, about 3x, because a JWT check, two HTTP hops
+# and JSON serialisation cost several times more than the indexed query does.
+# Raising concurrency does not widen the gap: past about four clients the host
+# is CPU-bound and the indexed case slows down just as much. See
+# scripts/verify-dbm.sh, which asserts both numbers against different
+# thresholds for exactly this reason.
+
+                                                              QUERY PLAN
+---------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=14619.00..14621.34 rows=20 width=266) (actual time=17.672..21.280 rows=20 loops=1)
+   Buffers: shared hit=11548 dirtied=1
+   InitPlan 1 (returns $0)
+     ->  Index Scan using users_email_key on users  (cost=0.29..2.50 rows=1 width=16) (actual time=0.026..0.027 rows=1 loops=1)
+           Index Cond: (email = 'power1@voyager.demo'::text)
+           Buffers: shared hit=3
+   ->  Gather Merge  (cost=14616.50..14620.93 rows=38 width=266) (actual time=17.671..21.277 rows=20 loops=1)
+         Workers Planned: 2
+         Params Evaluated: $0
+         Workers Launched: 2
+         Buffers: shared hit=11548 dirtied=1
+         ->  Sort  (cost=13616.48..13616.52 rows=19 width=266) (actual time=16.248..16.249 rows=16 loops=3)
+               Sort Key: bookings.created_at DESC
+               Sort Method: top-N heapsort  Memory: 34kB
+               Buffers: shared hit=11545 dirtied=1
+               Worker 0:  Sort Method: top-N heapsort  Memory: 33kB
+               Worker 1:  Sort Method: top-N heapsort  Memory: 33kB
+               ->  Parallel Seq Scan on bookings  (cost=0.00..13616.07 rows=19 width=266) (actual time=0.076..16.135 rows=213 loops=3)
+                     Filter: (user_id = $0)
+                     Rows Removed by Filter: 133359
+                     Buffers: shared hit=11529 dirtied=1
+ Planning:
+   Buffers: shared hit=266 dirtied=1
+ Planning Time: 0.399 ms
+ Execution Time: 21.312 ms

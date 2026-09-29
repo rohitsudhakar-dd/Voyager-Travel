@@ -94,23 +94,31 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-voyager}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required -- see .env.example}
       POSTGRES_DB: ${POSTGRES_DB:-voyager}
-      # Read by init/02-readonly-role.sql via psql's \getenv, on first boot only.
+      # Read by the init scripts via psql's \getenv. They run on first boot
+      # only; `make dbm-setup` re-applies 03-datadog.sql to a volume that
+      # already exists, and reads these from the container environment too.
       MOCK_DB_PASSWORD: ${MOCK_DB_PASSWORD:?MOCK_DB_PASSWORD is required -- see .env.example}
+      DD_PG_PASSWORD: ${DD_PG_PASSWORD:?DD_PG_PASSWORD is required -- see .env.example}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./infra/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
       - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
     # Autodiscovery via labels rather than a static Agent config file, so a
     # service and the check that watches it live in one place (§ 6.1).
-    # Phase 10 turns `dbm` on; until pg_stat_statements is loaded and the
-    # datadog role exists it would only produce errors in the Agent log.
     labels:
       com.datadoghq.ad.checks: |
         {"postgres":{"init_config":{},"instances":[{
           "host":"%%host%%","port":5432,
           "username":"datadog","password":"${DD_PG_PASSWORD:-}","dbname":"${POSTGRES_DB:-voyager}",
-          "dbm":false,
-          "relations":[{"relation_regex":".*"}]
+          "dbm":true,
+          "reported_hostname":"voyager-postgres",
+          "collect_schemas":{"enabled":true},
+          "query_samples":{"enabled":true},
+          "query_metrics":{"enabled":true},
+          "query_activity":{"enabled":true},
+          "collect_settings":{"enabled":true},
+          "relations":[{"relation_regex":".*"}],
+          "tags":["project:voyager","service:voyager-postgres"]
         }]}}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]

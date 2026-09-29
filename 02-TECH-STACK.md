@@ -307,8 +307,14 @@ postgres:
         "host":"%%host%%","port":5432,
         "username":"datadog","password":"${DD_PG_PASSWORD}","dbname":"voyager",
         "dbm":true,
+        "reported_hostname":"voyager-postgres",
         "collect_schemas":{"enabled":true},
-        "relations":[{"relation_regex":".*"}]
+        "query_samples":{"enabled":true},
+        "query_metrics":{"enabled":true},
+        "query_activity":{"enabled":true},
+        "collect_settings":{"enabled":true},
+        "relations":[{"relation_regex":".*"}],
+        "tags":["project:voyager","service:voyager-postgres"]
       }]}}
 redis:
   labels:
@@ -322,9 +328,29 @@ kafka:
 
 Kafka also needs `KAFKA_JMX_OPTS` exposing JMX on 9999 for the `kafka` check, plus the `kafka_consumer` check for lag. Data Streams Monitoring covers lag from the client side too — run both; they answer different questions.
 
+`reported_hostname` is not decoration. Without it the Agent identifies the database by the container's bridge IP, which changes every time the container is recreated, and Database Monitoring then treats each recreation as a new host — splitting the query history that makes a regression visible in the first place.
+
+**The labels only do anything if the Agent is listening for them.** `infra/datadog/datadog.yaml` must declare the container listener and its config provider:
+
+```yaml
+listeners:
+  - name: container
+config_providers:
+  - name: container
+    polling: true
+```
+
+The Agent image's entrypoint writes both of these into the `datadog.yaml` it generates at startup — and Voyager bind-mounts its own file over that one, which silently discards them. The resulting failure is close to invisible: the Agent starts healthy, every core check runs, and the only symptom is that `postgres`, `redisdb` and `kafka` never appear in `agent status`, which is indistinguishable from three integrations nobody has configured yet. Confirm with `agent configcheck`, not by reading this file.
+
 ### 6.2 Postgres setup for DBM
 
-`infra/postgres/init/02-datadog.sql` must create the monitoring role and extension:
+`infra/postgres/init/03-datadog.sql` creates the monitoring role, the extension and the explain function. (It is `03-`, not `02-`: `02-readonly-role.sql` already holds that slot, and the files run in name order.)
+
+Everything in `/docker-entrypoint-initdb.d` runs **once**, when the data volume is first initialised, so a stack that is upgraded rather than rebuilt never sees this file. `make dbm-setup` applies it to a running database instead; the file is written to be safe to run twice, and re-running it with a rotated `DD_PG_PASSWORD` is the supported way to change that password.
+
+`make verify-dbm` (`scripts/verify-dbm.sh`) asserts all of this end to end — the settings, the role's grants, the explain function, the Agent's four DBM collection pipelines, and each of the four database chaos flags. It drops the bookings index to prove the plan flip, so it restores it from an exit trap and pauses the load generators while it measures.
+
+The essentials:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
@@ -341,6 +367,10 @@ BEGIN
   FETCH curs INTO plan; CLOSE curs; RETURN QUERY SELECT plan;
 END; $$ LANGUAGE plpgsql RETURNS NULL ON NULL INPUT SECURITY DEFINER;
 ```
+
+Two grants that look optional and are not. `GRANT USAGE ON SCHEMA voyager TO datadog` is what `relations` and `collect_schemas` need to walk the application schema — `SELECT` on the tables is not required, because the statistics live in the catalog. And `pg_monitor` is what lets the role read other sessions' query text: without it `pg_stat_statements` returns only the check's own rows, which is a populated-looking view that says nothing about the application.
+
+The explain function deliberately does not pin its own `search_path`. The statements the Agent samples name tables unqualified, exactly as the application wrote them, and they resolve through the database-level `search_path` set in `01-schema-owner.sql`. Locking it down here would make every sampled statement fail to plan.
 
 And `postgresql.conf`:
 ```

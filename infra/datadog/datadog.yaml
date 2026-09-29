@@ -9,6 +9,19 @@
 # for Postgres, Redis and Kafka are Docker labels on those containers, so a
 # service and its monitoring travel together (§ 6.1).
 
+# The container listener and its config provider are what read those labels.
+# The image's entrypoint writes both into the datadog.yaml it generates, but
+# this file is bind-mounted over that one, so they have to be restated here.
+# Leaving them out is close to undetectable: the Agent starts clean, every
+# core check runs, and the only symptom is that postgres, redisdb and kafka
+# are absent from `agent status` -- which reads like three integrations that
+# have not been configured yet rather than three that were silently dropped.
+listeners:
+  - name: container
+config_providers:
+  - name: container
+    polling: true
+
 # Logs from every container are collected. The per-container opt-out is a
 # Docker label, which is how the load generators exclude themselves without
 # this file needing to know they exist.

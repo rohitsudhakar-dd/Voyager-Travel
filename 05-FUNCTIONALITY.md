@@ -660,6 +660,10 @@ activeFlags() -> string[]                   # for the span tag
 
 **Integrity rule:** no flag may produce an incorrect *business* result. A slow payment is still a correct payment; a declined payment is correctly recorded as declined. The only exceptions are `llm_hallucinate` and `llm_degrade_tools`, which exist precisely to demonstrate output-quality monitoring, and which must never touch the booking record.
 
+**Finding the database flags in DBM.** `db_lock_storm` runs as several workers contending for the same `inventory_holds` rows, on connections of their own outside the application pool, under the Postgres `application_name` **`voyager-booking-lockstorm`**. Both details are load-bearing. One worker holding a lock nobody wants produces no blocking sessions at all, because Database Monitoring reports blocking by reading `pg_blocking_pids()` — a lock with no waiter is invisible. And scenario S10 pairs this flag with `db_pool_starvation`, so workers drawing on the application's two remaining connections would stop the service answering rather than slow it, which the integrity rule above forbids. The `application_name` is what identifies the blocker in a DBM sample.
+
+`db_drop_index` moves the account-page statement from roughly 0.05 ms to 14–21 ms — 280x or more, and that is the number Database Monitoring displays. The `GET /bookings/mine` endpoint only moves about 3x, because a JWT check, two HTTP hops and JSON serialisation cost several times more than the indexed query. Both plans are committed under `docs/explain-plans/`; `scripts/verify-dbm.sh` asserts both figures.
+
 ---
 
 ## 12. Logging schema
