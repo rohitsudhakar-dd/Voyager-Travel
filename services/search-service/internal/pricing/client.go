@@ -26,7 +26,7 @@ func NewClient(baseURL string) *Client {
 		baseURL: baseURL,
 		// Wrapped so the pricing call is a child of the search span rather
 		// than a separate trace that has to be correlated by hand.
-		http:    httptrace.WrapClient(&http.Client{Timeout: 5 * time.Second}),
+		http: httptrace.WrapClient(&http.Client{Timeout: 5 * time.Second}),
 	}
 }
 

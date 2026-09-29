@@ -105,16 +105,29 @@ func (i *Index) Evaluate(offer Offer, now time.Time, hotPath bool) Quote {
 		amount = 0
 	}
 
-	taxes := int64(float64(amount) * TaxRate)
 	return Quote{
 		OfferID:          offer.ID,
 		BaseCents:        offer.BaseCents,
 		AdjustmentsCents: amount - offer.BaseCents,
-		TaxesCents:       taxes,
-		TotalCents:       amount + taxes,
+		TotalCents:       amount,
 		Currency:         offer.Currency,
 		AppliedRules:     applied,
 		RulesEvaluated:   evaluated,
+	}
+}
+
+// ApplyTaxes fills in TaxesCents and moves TotalCents to the gross figure.
+//
+// It is a separate pass over the batch rather than a line inside Evaluate so
+// that rule matching and tax have their own spans. They fail and slow down for
+// entirely different reasons -- rule matching against the size of the rule
+// set, tax against nothing at all -- and a single `pricing.evaluate` span
+// covering both would make the hot-path chaos flag look like a tax problem.
+func ApplyTaxes(quotes []Quote) {
+	for i := range quotes {
+		taxes := int64(float64(quotes[i].TotalCents) * TaxRate)
+		quotes[i].TaxesCents = taxes
+		quotes[i].TotalCents += taxes
 	}
 }
 

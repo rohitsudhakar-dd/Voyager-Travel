@@ -15,6 +15,7 @@ import { MalformedEventError, parseEnvelope, readConfirmedBooking } from './even
 import { kafka } from './kafka';
 import type { Logger } from './logger';
 import { computePoints } from './points';
+import { span, tag } from './tracing';
 import { publishPointsAccrued, publishTierUpgraded } from './producer';
 
 const PAUSE_POLL_MS = 1_000;
@@ -44,18 +45,34 @@ async function handleConfirmed(
 
   const fareMultiplier = await findFareMultiplier(booking.fareClassCode);
 
+  tag({
+    'usr.id': booking.userId,
+    'booking.id': booking.bookingId,
+    'booking.state': 'CONFIRMED',
+    'product.type': booking.productType,
+  });
+
   let result;
+  let earnedAtTier: string | undefined;
   try {
     result = await accrue({
       userId: booking.userId,
       bookingId: booking.bookingId,
       description: `Accrual for booking ${booking.pnr ?? booking.bookingId}`,
-      points: (tier) =>
-        computePoints({
-          eligibleCents: booking.eligibleCents,
-          fareMultiplier,
-          tier,
-        }),
+      // The tier is only known once accrue has locked the account row, so
+      // the span opens inside the callback rather than around the call. The
+      // tier itself is tagged afterwards: in here the active span is the
+      // child, and a tag there is not a facet on the trace.
+      points: (tier) => {
+        earnedAtTier = tier;
+        return span('loyalty.compute_points', () =>
+          computePoints({
+            eligibleCents: booking.eligibleCents,
+            fareMultiplier,
+            tier,
+          }),
+        );
+      },
     });
   } catch (error) {
     if (error instanceof UnknownUserError) {
@@ -82,6 +99,8 @@ async function handleConfirmed(
     }
     throw error;
   }
+
+  if (earnedAtTier) tag({ 'usr.tier': earnedAtTier });
 
   if (result.duplicate) {
     logger.info(

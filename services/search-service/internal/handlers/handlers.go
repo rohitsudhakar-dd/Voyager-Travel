@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	chitrace "gopkg.in/DataDog/dd-trace-go.v1/contrib/go-chi/chi.v5"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
+	chitrace "gopkg.in/DataDog/dd-trace-go.v1/contrib/go-chi/chi.v5"
 
 	"voyager/search-service/internal/apierr"
 	"voyager/search-service/internal/cache"
@@ -22,6 +22,7 @@ import (
 	"voyager/search-service/internal/httpx"
 	"voyager/search-service/internal/pricing"
 	"voyager/search-service/internal/store"
+	"voyager/search-service/internal/tracing"
 )
 
 // The seed covers today plus 360 days (05-FUNCTIONALITY.md § 15); searching
@@ -133,6 +134,23 @@ type hotelRequest struct {
 	Filters  store.Filters `json:"filters"`
 }
 
+// tagSearch puts the criteria on the root span.
+//
+// Route and cabin are flight concepts, so a hotel search leaves them unset
+// rather than blank: "group by search.route" is only useful if every trace it
+// returns actually has a route, and an empty bucket the size of the hotel
+// traffic would drown the routes that matter. product.type is the facet that
+// separates the two.
+func tagSearch(ctx context.Context, criteria store.Criteria, flags string) {
+	tracing.RootTag(ctx, "product.type", string(criteria.ProductType))
+	tracing.RootTag(ctx, "chaos.active_flags", flags)
+
+	if criteria.ProductType == store.Flights {
+		tracing.RootTag(ctx, "search.route", criteria.Origin+"-"+criteria.Destination)
+		tracing.RootTag(ctx, "search.cabin", criteria.Cabin)
+	}
+}
+
 func (s *Server) searchFlights(w http.ResponseWriter, r *http.Request) {
 	var request flightRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -146,6 +164,8 @@ func (s *Server) searchFlights(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, failure)
 		return
 	}
+
+	tagSearch(r.Context(), criteria, s.chaos.ActiveFlags())
 
 	outcome, failure := s.runFlightSearch(r.Context(), criteria)
 	if failure != nil {
@@ -180,6 +200,8 @@ func (s *Server) searchHotels(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, failure)
 		return
 	}
+
+	tagSearch(r.Context(), criteria, s.chaos.ActiveFlags())
 
 	outcome, failure := s.runHotelSearch(r.Context(), criteria)
 	if failure != nil {

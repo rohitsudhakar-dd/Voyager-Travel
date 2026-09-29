@@ -12,6 +12,7 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import Fastify from 'fastify';
 
+import { principalOf } from './auth';
 import { config, redacted } from './config';
 import { closeDeps, createDeps, reportedVersion } from './deps';
 import { VoyagerError } from './errors';
@@ -21,6 +22,7 @@ import { registerAuthRoutes } from './routes/auth';
 import { registerBffRoutes } from './routes/bff';
 import { registerProxyRoutes } from './routes/proxy';
 import { registerReferenceRoutes } from './routes/reference';
+import { tag } from './tracing';
 
 /** Liveness probes fire every ten seconds; logging them buries real traffic. */
 const QUIET_PATHS = new Set(['/health', '/ready']);
@@ -67,6 +69,20 @@ async function main(): Promise<void> {
 
   app.addHook('onRequest', async (request) => {
     (request as { startedAt?: bigint }).startedAt = process.hrtime.bigint();
+    if (QUIET_PATHS.has(request.url)) return;
+
+    // Tagged here rather than in onResponse because dd-trace finishes the
+    // request span from its own onResponse hook, and a tag written to a
+    // finished span is dropped without complaint.
+    //
+    // The gateway is the entry point, so these two land on the trace root and
+    // become facets for everything downstream: "every trace for this user",
+    // "every trace taken while payment_decline_rate was up".
+    const principal = principalOf(request);
+    tag({
+      'chaos.active_flags': (await deps.chaos.activeFlags()).join(','),
+      ...(principal ? { 'usr.id': principal.id, 'usr.tier': principal.tier } : {}),
+    });
   });
 
   app.addHook('onSend', async (request, reply, payload) => {

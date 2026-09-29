@@ -63,7 +63,7 @@ func TestIndexedPathOnlyVisitsCandidatePatterns(t *testing.T) {
 		rule(8, "EU-APAC", Percent, 99, 99),
 	})
 
-	quote := index.Evaluate(baseOffer(), now, false)
+	quote := priced(index, baseOffer(), now, false)
 
 	if quote.RulesEvaluated != 5 {
 		t.Fatalf("expected the five candidate patterns to be visited, got %d", quote.RulesEvaluated)
@@ -88,8 +88,8 @@ func TestHotPathAgreesWithIndexedPath(t *testing.T) {
 	}
 	index := BuildIndex(all)
 
-	indexed := index.Evaluate(baseOffer(), now, false)
-	hot := index.Evaluate(baseOffer(), now, true)
+	indexed := priced(index, baseOffer(), now, false)
+	hot := priced(index, baseOffer(), now, true)
 
 	if indexed.TotalCents != hot.TotalCents {
 		t.Fatalf("indexed total %d, hot-path total %d", indexed.TotalCents, hot.TotalCents)
@@ -112,7 +112,7 @@ func TestRulesApplyInPriorityOrder(t *testing.T) {
 		rule(3, "*-JFK", Percent, -50, 10),
 	})
 
-	quote := index.Evaluate(baseOffer(), now, false)
+	quote := priced(index, baseOffer(), now, false)
 
 	want := int64(13500)
 	if got := quote.BaseCents + quote.AdjustmentsCents; got != want {
@@ -131,7 +131,7 @@ func TestFareClassMustMatch(t *testing.T) {
 	applicable.FareClassCode = "BIZFLEX"
 	index := BuildIndex([]Rule{applicable})
 
-	quote := index.Evaluate(baseOffer(), now, false)
+	quote := priced(index, baseOffer(), now, false)
 
 	if len(quote.AppliedRules) != 0 {
 		t.Fatalf("a BIZFLEX rule must not price an ECOSTD offer")
@@ -149,7 +149,7 @@ func TestDateWindowAndDayOfWeekMask(t *testing.T) {
 	wrongDay := rule(2, "LHR-JFK", Percent, 25, 10)
 	wrongDay.DayOfWeekMask = 127 &^ (1 << 2)
 
-	quote := BuildIndex([]Rule{outOfWindow, wrongDay}).Evaluate(baseOffer(), now, false)
+	quote := priced(BuildIndex([]Rule{outOfWindow, wrongDay}), baseOffer(), now, false)
 
 	if len(quote.AppliedRules) != 0 {
 		t.Fatalf("expected no rules to apply, got %d", len(quote.AppliedRules))
@@ -163,7 +163,7 @@ func TestAdvancePurchaseWindow(t *testing.T) {
 	beyond := rule(2, "LHR-*", Percent, 10, 10)
 	beyond.AdvancePurchaseDays = 90
 
-	quote := BuildIndex([]Rule{within, beyond}).Evaluate(baseOffer(), now, false)
+	quote := priced(BuildIndex([]Rule{within, beyond}), baseOffer(), now, false)
 
 	if len(quote.AppliedRules) != 1 || quote.AppliedRules[0].ID != 1 {
 		t.Fatalf("only the 21-day advance rule should apply, got %+v", quote.AppliedRules)
@@ -175,7 +175,7 @@ func TestMinimumStayRequiresAReturn(t *testing.T) {
 	minStay.MinStayDays = intPtr(3)
 	index := BuildIndex([]Rule{minStay})
 
-	oneWay := index.Evaluate(baseOffer(), now, false)
+	oneWay := priced(index, baseOffer(), now, false)
 	if len(oneWay.AppliedRules) != 0 {
 		t.Fatalf("a minimum-stay rule cannot apply to a one-way fare")
 	}
@@ -183,14 +183,14 @@ func TestMinimumStayRequiresAReturn(t *testing.T) {
 	tooShort := baseOffer()
 	shortReturn := date("2026-10-15")
 	tooShort.ReturnDate = &shortReturn
-	if applied := index.Evaluate(tooShort, now, false).AppliedRules; len(applied) != 0 {
+	if applied := priced(index, tooShort, now, false).AppliedRules; len(applied) != 0 {
 		t.Fatalf("a one-night stay must not satisfy a three-night minimum")
 	}
 
 	longEnough := baseOffer()
 	lateReturn := date("2026-10-21")
 	longEnough.ReturnDate = &lateReturn
-	if applied := index.Evaluate(longEnough, now, false).AppliedRules; len(applied) != 1 {
+	if applied := priced(index, longEnough, now, false).AppliedRules; len(applied) != 1 {
 		t.Fatalf("a seven-night stay should satisfy a three-night minimum, got %d", len(applied))
 	}
 }
@@ -205,14 +205,14 @@ func TestConditionsAreRequirements(t *testing.T) {
 
 	index := BuildIndex([]Rule{weekendOnly, indifferent})
 
-	midweek := index.Evaluate(baseOffer(), now, false)
+	midweek := priced(index, baseOffer(), now, false)
 	if len(midweek.AppliedRules) != 1 || midweek.AppliedRules[0].ID != 2 {
 		t.Fatalf("only the unconditional rule should apply midweek, got %+v", midweek.AppliedRules)
 	}
 
 	weekend := baseOffer()
 	weekend.DepartDate = date("2026-10-17") // Saturday
-	if applied := index.Evaluate(weekend, now, false).AppliedRules; len(applied) != 2 {
+	if applied := priced(index, weekend, now, false).AppliedRules; len(applied) != 2 {
 		t.Fatalf("both rules should apply on a Saturday, got %d", len(applied))
 	}
 }
@@ -222,7 +222,7 @@ func TestDiscountsCannotProduceANegativeFare(t *testing.T) {
 		rule(1, "LHR-JFK", Fixed, -5000, 10),
 	})
 
-	quote := index.Evaluate(baseOffer(), now, false)
+	quote := priced(index, baseOffer(), now, false)
 
 	if quote.BaseCents+quote.AdjustmentsCents < 0 {
 		t.Fatalf("adjusted amount went negative: %d", quote.BaseCents+quote.AdjustmentsCents)
@@ -250,4 +250,13 @@ func TestPatternMatchingAcceptsCodesAndRegions(t *testing.T) {
 			t.Errorf("patternMatches(%q) = %v, want %v", pattern, got, want)
 		}
 	}
+}
+
+// priced is Evaluate followed by the tax pass, which is how the API layer
+// calls them. The two are separate so they can carry separate spans; every
+// assertion here is about the finished quote, so the tests use them together.
+func priced(index *Index, offer Offer, now time.Time, hotPath bool) Quote {
+	quotes := []Quote{index.Evaluate(offer, now, hotPath)}
+	ApplyTaxes(quotes)
+	return quotes[0]
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
 // Store keeps the rule index in memory and refreshes it on a timer. Reads
@@ -72,7 +73,13 @@ func (s *Store) Start(ctx context.Context, interval time.Duration) error {
 	return nil
 }
 
-func (s *Store) reload(ctx context.Context) error {
+// reload is wrapped rather than the handler path because the refresh runs on
+// a timer, off any request. Without its own span the two Postgres reads --
+// the largest queries this service makes -- belong to no trace at all.
+func (s *Store) reload(ctx context.Context) (err error) {
+	span, ctx := tracer.StartSpanFromContext(ctx, "pricing.load_rules")
+	defer func() { span.Finish(tracer.WithError(err)) }()
+
 	started := time.Now()
 
 	loaded, err := s.loadRules(ctx)

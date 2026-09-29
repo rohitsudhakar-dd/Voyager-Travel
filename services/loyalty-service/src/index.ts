@@ -26,6 +26,7 @@ import { NotFoundError, toEnvelope, ValidationError, VoyagerError } from './erro
 import { pingKafka } from './kafka';
 import { createLogger } from './logger';
 import { computePoints, nextTier, Tier, tierFor, TIER_EARN_MULTIPLIER } from './points';
+import { span, tag } from './tracing';
 import { startProducer, stopProducer } from './producer';
 
 const logger = createLogger(config.service, config.env, config.version);
@@ -218,7 +219,14 @@ app.post('/v1/loyalty/preview', async (request) => {
   const lifetimePoints = account?.lifetime_points ?? 0;
   const fareMultiplier = await findFareMultiplier(body.fareClassCode ?? null);
 
-  const points = computePoints({ eligibleCents, fareMultiplier, tier });
+  const points = span('loyalty.compute_points', () =>
+    computePoints({ eligibleCents, fareMultiplier, tier }),
+  );
+
+  tag({
+    'usr.tier': tier,
+    ...(body.userId ? { 'usr.id': body.userId } : {}),
+  });
 
   return {
     userId: body.userId ?? null,

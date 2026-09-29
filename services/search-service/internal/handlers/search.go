@@ -11,6 +11,7 @@ import (
 	"voyager/search-service/internal/gds"
 	"voyager/search-service/internal/pricing"
 	"voyager/search-service/internal/store"
+	"voyager/search-service/internal/tracing"
 )
 
 // Outcome is everything a handler needs to answer a search request.
@@ -25,7 +26,7 @@ type Outcome struct {
 func (s *Server) runFlightSearch(ctx context.Context, criteria store.Criteria) (*Outcome, *apierr.Error) {
 	key := store.CacheKey(criteria)
 
-	if set, hit := s.loadCached(ctx, key); hit {
+	if set, hit := s.lookupCache(ctx, key); hit {
 		return &Outcome{Set: set, CacheHit: true}, nil
 	}
 
@@ -40,7 +41,10 @@ func (s *Server) runFlightSearch(ctx context.Context, criteria store.Criteria) (
 	query.Passengers.Children = criteria.Children
 	query.Passengers.Infants = criteria.Infants
 
-	outcomes := s.gds.FanOutFlights(ctx, query)
+	var outcomes []gds.ProviderOutcome
+	tracing.Span(ctx, "search.fanout", func(ctx context.Context) {
+		outcomes = s.gds.FanOutFlights(ctx, query)
+	})
 
 	var raw []store.FlightResult
 	responded := 0
@@ -64,15 +68,21 @@ func (s *Server) runFlightSearch(ctx context.Context, criteria store.Criteria) (
 		return nil, apierr.GdsUnavailable(errors.New("every provider failed"))
 	}
 
-	results := gds.DedupeFlights(raw)
-	results = store.FilterFlights(results, criteria.Filters)
+	// Four provider schemas collapsing into one is where a search spends its
+	// CPU on a large result set, and it is invisible in the fan-out span
+	// because it happens after every provider has answered.
+	var results []store.FlightResult
+	tracing.Span(ctx, "search.normalize_results", func(context.Context) {
+		results = gds.DedupeFlights(raw)
+		results = store.FilterFlights(results, criteria.Filters)
 
-	// One batch, so the pricing call stays a single span with a bounded
-	// payload. Beyond this the extra results would never be looked at.
-	if len(results) > pricing.MaxBatchSize {
-		store.SortFlights(results, store.DefaultSort)
-		results = results[:pricing.MaxBatchSize]
-	}
+		// One batch, so the pricing call stays a single span with a bounded
+		// payload. Beyond this the extra results would never be looked at.
+		if len(results) > pricing.MaxBatchSize {
+			store.SortFlights(results, store.DefaultSort)
+			results = results[:pricing.MaxBatchSize]
+		}
+	})
 
 	if err := s.priceFlights(ctx, criteria, results); err != nil {
 		return nil, err
@@ -97,16 +107,19 @@ func (s *Server) runFlightSearch(ctx context.Context, criteria store.Criteria) (
 func (s *Server) runHotelSearch(ctx context.Context, criteria store.Criteria) (*Outcome, *apierr.Error) {
 	key := store.CacheKey(criteria)
 
-	if set, hit := s.loadCached(ctx, key); hit {
+	if set, hit := s.lookupCache(ctx, key); hit {
 		return &Outcome{Set: set, CacheHit: true}, nil
 	}
 
-	outcomes := s.gds.FanOutHotels(ctx, gds.HotelQuery{
-		City:     criteria.City,
-		CheckIn:  criteria.CheckIn,
-		CheckOut: criteria.CheckOut,
-		Guests:   criteria.Adults + criteria.Children,
-		Rooms:    criteria.Rooms,
+	var outcomes []gds.ProviderOutcome
+	tracing.Span(ctx, "search.fanout", func(ctx context.Context) {
+		outcomes = s.gds.FanOutHotels(ctx, gds.HotelQuery{
+			City:     criteria.City,
+			CheckIn:  criteria.CheckIn,
+			CheckOut: criteria.CheckOut,
+			Guests:   criteria.Adults + criteria.Children,
+			Rooms:    criteria.Rooms,
+		})
 	})
 
 	var raw []store.HotelResult
@@ -130,8 +143,11 @@ func (s *Server) runHotelSearch(ctx context.Context, criteria store.Criteria) (*
 		return nil, apierr.GdsUnavailable(errors.New("every provider failed"))
 	}
 
-	results := store.FilterHotels(gds.DedupeHotels(raw), criteria.Filters)
-	store.SortHotels(results, criteria.Sort)
+	var results []store.HotelResult
+	tracing.Span(ctx, "search.normalize_results", func(context.Context) {
+		results = store.FilterHotels(gds.DedupeHotels(raw), criteria.Filters)
+		store.SortHotels(results, criteria.Sort)
+	})
 
 	set := &store.ResultSet{
 		SearchID:           store.NewSearchID(),
@@ -202,6 +218,21 @@ func toAppliedRules(rules []pricing.AppliedRule) []store.AppliedRule {
 		converted[i] = store.AppliedRule(rule)
 	}
 	return converted
+}
+
+// lookupCache is loadCached in a span, with the outcome promoted to the root.
+//
+// A cache hit and a cache miss are the same request to everything except the
+// latency, so search.cache_hit on the root span is the only way to compare
+// the two populations without opening traces one at a time.
+func (s *Server) lookupCache(ctx context.Context, key string) (*store.ResultSet, bool) {
+	var set *store.ResultSet
+	var hit bool
+	tracing.Span(ctx, "search.cache_lookup", func(ctx context.Context) {
+		set, hit = s.loadCached(ctx, key)
+	})
+	tracing.RootTag(ctx, "search.cache_hit", hit)
+	return set, hit
 }
 
 // loadCached resolves a request hash all the way to a result set. A pointer

@@ -9,6 +9,7 @@
 package tracing
 
 import (
+	"context"
 	"os"
 	"strconv"
 
@@ -66,4 +67,36 @@ func Start(service, env, version string) func() {
 func WrapRedis(client *redis.Client, service string) *redis.Client {
 	redistrace.WrapClient(client, redistrace.WithServiceName(service+"-redis"))
 	return client
+}
+
+// Span runs fn inside a named child span.
+//
+// The wrapper exists so the call sites stay one line: Go has no decorator, and
+// the four-line StartSpanFromContext / defer Finish dance repeated at every
+// interesting point buries the work it is meant to describe.
+func Span(ctx context.Context, name string, fn func(ctx context.Context)) {
+	span, ctx := tracer.StartSpanFromContext(ctx, name)
+	defer span.Finish()
+	fn(ctx)
+}
+
+// RootTag tags the request's local root span rather than whichever span
+// happens to be current.
+//
+// A tag set on a leaf can only be found by someone who already knows which
+// leaf to open. On the root it is a facet: "show me every trace where
+// search.cache_hit is false" is the question this application exists to
+// answer, and it only works if the tag is where the search looks.
+func RootTag(ctx context.Context, key string, value any) {
+	span, ok := tracer.SpanFromContext(ctx)
+	if !ok {
+		return
+	}
+	// A nil root happens when the span came from a context that outlived its
+	// trace; tagging it would panic on a path that is otherwise harmless.
+	if root, ok := span.(interface{ Root() tracer.Span }); ok && root.Root() != nil {
+		root.Root().SetTag(key, value)
+		return
+	}
+	span.SetTag(key, value)
 }

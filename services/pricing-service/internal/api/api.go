@@ -2,21 +2,23 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	chitrace "gopkg.in/DataDog/dd-trace-go.v1/contrib/go-chi/chi.v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
+	chitrace "gopkg.in/DataDog/dd-trace-go.v1/contrib/go-chi/chi.v5"
 
 	"voyager/pricing-service/internal/apierr"
 	"voyager/pricing-service/internal/chaos"
 	"voyager/pricing-service/internal/config"
 	"voyager/pricing-service/internal/httpx"
 	"voyager/pricing-service/internal/rules"
+	"voyager/pricing-service/internal/tracing"
 )
 
 // One batch caps at 50 offers, which is what search-service sends per page
@@ -130,7 +132,7 @@ func (s *Server) priceOne(w http.ResponseWriter, r *http.Request) {
 	}
 	s.chaos.Refresh(r.Context())
 
-	quotes, err := s.evaluate([]offerRequest{request})
+	quotes, err := s.evaluate(r.Context(), []offerRequest{request})
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -151,7 +153,7 @@ func (s *Server) priceBatch(w http.ResponseWriter, r *http.Request) {
 	s.chaos.Refresh(r.Context())
 
 	started := time.Now()
-	quotes, err := s.evaluate(request.Offers)
+	quotes, err := s.evaluate(r.Context(), request.Offers)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -165,12 +167,16 @@ func (s *Server) priceBatch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) evaluate(requests []offerRequest) ([]rules.Quote, *apierr.Error) {
+func (s *Server) evaluate(ctx context.Context, requests []offerRequest) ([]rules.Quote, *apierr.Error) {
 	index := s.store.Index()
 	hotPath := s.chaos.Bool("pricing_hot_path")
 	now := time.Now().UTC()
 
+	tracing.RootTag(ctx, "product.type", "flights")
+	tracing.RootTag(ctx, "chaos.active_flags", s.chaos.ActiveFlags())
+
 	quotes := make([]rules.Quote, 0, len(requests))
+	offers := make([]rules.Offer, 0, len(requests))
 	for _, request := range requests {
 		if request.BaseCents <= 0 || request.Currency == "" {
 			return nil, apierr.InvalidPricingRequest(
@@ -191,7 +197,7 @@ func (s *Server) evaluate(requests []offerRequest) ([]rules.Quote, *apierr.Error
 			returnDate = &parsed
 		}
 
-		quotes = append(quotes, index.Evaluate(rules.Offer{
+		offers = append(offers, rules.Offer{
 			ID:            request.ID,
 			Origin:        request.Origin,
 			Destination:   request.Destination,
@@ -205,8 +211,17 @@ func (s *Server) evaluate(requests []offerRequest) ([]rules.Quote, *apierr.Error
 			Currency:      request.Currency,
 			Corporate:     request.Corporate,
 			PromoEligible: request.PromoEligible,
-		}, now, hotPath))
+		})
 	}
+
+	tracing.Span(ctx, "pricing.evaluate_fare_rules", func(context.Context) {
+		for _, offer := range offers {
+			quotes = append(quotes, index.Evaluate(offer, now, hotPath))
+		}
+	})
+	tracing.Span(ctx, "pricing.apply_taxes", func(context.Context) {
+		rules.ApplyTaxes(quotes)
+	})
 	return quotes, nil
 }
 
