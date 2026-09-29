@@ -21,6 +21,7 @@ import openai
 
 from app.config import Settings
 from app.errors import LlmProviderError
+from app.llmobs import annotate, estimate_cost_usd, llm_span, redact
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,25 @@ class LlmClient:
         return self._settings.llm_model
 
     async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        round_number: int = 1,
+    ) -> AsyncIterator[LlmEvent]:
+        with llm_span(
+            "chat.completion",
+            model_name=self._settings.llm_model,
+            model_provider=self._settings.llm_provider,
+        ) as span:
+            async for event in self._stream(messages, tools=tools):
+                if isinstance(event, Done):
+                    _annotate_completion(
+                        span, self._settings, messages, event.completion, round_number
+                    )
+                yield event
+
+    async def _stream(
         self,
         messages: list[dict[str, Any]],
         *,
@@ -168,6 +188,80 @@ class LlmClient:
 
     async def close(self) -> None:
         await self._client.close()
+
+
+def _annotate_completion(
+    span,
+    settings: Settings,
+    messages: list[dict[str, Any]],
+    completion: Completion,
+    round_number: int,
+) -> None:
+    """What LLM Observability shows for one model call.
+
+    `total_cost` is estimated rather than measured, because the provider is
+    invented and bills nobody. It is annotated anyway: a chain whose token
+    counts are visible but whose cost is not makes the one question an LLM bill
+    provokes -- which conversations are expensive -- unanswerable in the
+    product that exists to answer it.
+    """
+    annotate(
+        span=span,
+        input_data=redact(_as_messages(messages)),
+        output_data=redact(_answer_of(completion)),
+        metadata={
+            "round": round_number,
+            "streamed": True,
+            "finish_reason": completion.finish_reason,
+            "tool_calls": [call.name for call in completion.tool_calls],
+        },
+        metrics={
+            "input_tokens": completion.prompt_tokens,
+            "output_tokens": completion.completion_tokens,
+            "total_tokens": completion.prompt_tokens + completion.completion_tokens,
+            "total_cost": estimate_cost_usd(
+                settings, completion.prompt_tokens, completion.completion_tokens
+            ),
+            # Seconds, as the LLM Observability schema defines it. This is the
+            # number `llm_latency_ms` moves, and the one the browser feels.
+            "time_to_first_token": (completion.first_token_ms or 0) / 1000,
+        },
+    )
+
+
+def _as_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """The wire messages in the shape LLM Observability accepts.
+
+    A tool-call turn carries `content: null` and its payload in `tool_calls`,
+    which the annotation rejects as a non-string content. Rendering the request
+    as text keeps the turn in the conversation rather than dropping the one
+    message that explains why a tool ran.
+    """
+    rendered = []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, str):
+            calls = message.get("tool_calls") or []
+            content = " ".join(
+                f"[tool call] {call['function']['name']}({call['function']['arguments']})"
+                for call in calls
+            )
+        rendered.append({"role": str(message.get("role", "")), "content": content})
+    return rendered
+
+
+def _answer_of(completion: Completion) -> list[dict[str, str]]:
+    if completion.tool_calls:
+        return [
+            {
+                "role": "assistant",
+                "content": " ".join(
+                    f"[tool call] {call.name}({json.dumps(call.arguments)})"
+                    for call in completion.tool_calls
+                ),
+            }
+        ]
+    return [{"role": "assistant", "content": completion.content}]
 
 
 def _arguments(raw: str) -> dict[str, Any]:

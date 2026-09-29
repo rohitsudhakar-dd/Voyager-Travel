@@ -24,6 +24,7 @@ from typing import Any, Iterable, Literal
 from app.clients import BookingClient, LoyaltyClient
 from app.errors import DependencyError
 from app.intents import cancellation_confirmed
+from app.llmobs import tool_span
 from app.repo import Conversation, Message, SupportRepo
 from app.tools.schemas import (
     ESCALATE_TO_HUMAN,
@@ -62,6 +63,25 @@ def known_booking_ids(context: ToolContext) -> set[str]:
             identifier = booking.get("id") or booking.get("bookingId")
             if isinstance(identifier, str):
                 known.add(identifier)
+    return known
+
+
+def known_pnrs(history: list[Message]) -> set[str]:
+    """Booking references this conversation actually retrieved.
+
+    The counterpart to `known_booking_ids`, and the basis of the hallucination
+    check in conversation.py: a reference in an answer that is not in here was
+    not read out of the database, whatever the model says about it.
+    """
+    known: set[str] = set()
+    for message in history:
+        result = message.tool_result
+        if not isinstance(result, dict):
+            continue
+        for booking in _bookings_in(result):
+            pnr = booking.get("pnr") or booking.get("recordLocator")
+            if isinstance(pnr, str):
+                known.add(pnr.upper())
     return known
 
 
@@ -110,6 +130,7 @@ class ToolRunner:
 
     # ------------------------------------------------------------------- tools
 
+    @tool_span("lookup_booking")
     async def _lookup_booking(
         self, args: dict[str, Any], _context: ToolContext
     ) -> ToolResult:
@@ -140,6 +161,7 @@ class ToolRunner:
 
         return ToolResult("ok", {"status": "ok", **_as_booking_result(response.body)})
 
+    @tool_span("get_cancellation_policy")
     async def _get_cancellation_policy(
         self, args: dict[str, Any], context: ToolContext
     ) -> ToolResult:
@@ -153,6 +175,7 @@ class ToolRunner:
 
         return ToolResult("ok", {"status": "ok", **_policy_from(response.body)})
 
+    @tool_span("initiate_cancellation")
     async def _initiate_cancellation(
         self, args: dict[str, Any], context: ToolContext
     ) -> ToolResult:
@@ -193,6 +216,7 @@ class ToolRunner:
             },
         )
 
+    @tool_span("get_loyalty_balance")
     async def _get_loyalty_balance(
         self, _args: dict[str, Any], context: ToolContext
     ) -> ToolResult:
@@ -224,6 +248,7 @@ class ToolRunner:
             },
         )
 
+    @tool_span("escalate_to_human")
     async def _escalate_to_human(
         self, args: dict[str, Any], context: ToolContext
     ) -> ToolResult:

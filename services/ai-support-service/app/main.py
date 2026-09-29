@@ -24,6 +24,7 @@ from app.conversation import ConversationService
 from app.errors import DependencyError, ValidationError, VoyagerError, envelope
 from app.health import router as health_router
 from app.llm import LlmClient
+from app.llmobs import enable_llmobs
 from app.logging import configure_logging, get_logger
 from app.repo import SupportRepo
 from app.routers.support import router as support_router
@@ -34,6 +35,11 @@ configure_logging(
     settings.dd_service, settings.dd_env, settings.dd_version, settings.log_level
 )
 logger = get_logger("app.support")
+
+# At import, not in the lifespan: LLMObs.enable() rebuilds the tracer's span
+# processors, and a trace already in flight when it does is dropped silently.
+# Here the port is not bound yet, so there is none. See app/llmobs.py.
+enable_llmobs(settings, logger)
 
 
 @asynccontextmanager

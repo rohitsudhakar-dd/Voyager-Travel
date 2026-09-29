@@ -552,6 +552,34 @@ Annotate the `llm` spans with `input`, `output`, `model`, `prompt_tokens`, `comp
 
 `initiate_cancellation` must be gated: the model may only call it after the user has said yes in the conversation. Enforce this in the tool handler, not in the prompt — a prompt-only guard is a demo waiting to embarrass you.
 
+### 9.1 What the chain is annotated with
+
+The metric keys are Datadog's, from the LLM Observability span schema, not
+Voyager's. `total_cost` is estimated from the tariff in `02-TECH-STACK.md § 7.3`
+because the provider is invented and bills nobody; it is annotated anyway,
+because token counts without a cost leave the one question an LLM bill provokes
+— which conversations are expensive — unanswerable in the product that exists
+to answer it.
+
+| Span | Kind | Annotated with |
+|---|---|---|
+| `support.handle_message` | `workflow` | The user's message as input, the assistant's answer as output |
+| `support.load_history` | `retrieval` | The conversation id as input; one document per replayed turn as output |
+| `chat.completion` | `llm` | `model_name`, `model_provider`, the wire messages in and out, metadata (`round`, `finish_reason`, `tool_calls`), and metrics `input_tokens`, `output_tokens`, `total_tokens`, `total_cost`, `time_to_first_token` |
+| `lookup_booking`, `get_cancellation_policy`, `initiate_cancellation`, `get_loyalty_balance`, `escalate_to_human` | `tool` | The arguments in, the result out, an `outcome` tag, and an error when the outcome is `error`. `refused` and `not_found` are answers the model is expected to relay, not failures |
+| `support.tool_call_dropped` | `tool` | Only when `llm_degrade_tools` is on and the model answered a non-`general` intent in prose. Always an error, `error.type` `DroppedToolCallError`. No tool ran, so the span is instantaneous — that is the point of it. Without it the failure is recorded as the *absence* of a step, which is legible only to someone who already knows the shape of a working chain |
+| `support.persist_message` | `task` | — |
+
+Two further names, both added by Phase 10:
+
+- **`answer_quality`** — a tag on the `workflow` span, value `unverified_booking_reference`, set when the answer quotes a PNR-shaped reference that no tool call in the conversation returned. This is the `llm_hallucinate` signature, detected without reference to the flag. Nothing is rewritten: the flag exists to show that output quality is invisible to latency and error monitors, and repairing it would delete the demo.
+- **`support.intent`, `support.conversation_id`, `llm.model`** — span tags on the *local root* span, alongside `usr.id` and `chaos.active_flags` from `03-EXECUTION-ORDER.md` phase 8. On the root because a tag there is a facet the APM trace list can be filtered by, and a tag on a child is not.
+
+Redaction: digit runs of card length are masked on the way into any span
+annotation. The assistant is told never to ask for card details, but a
+traveller can volunteer them unprompted, and from then on they are in the
+history that every later turn replays.
+
 ---
 
 ## 10. Chaos framework
@@ -623,8 +651,8 @@ activeFlags() -> string[]                   # for the span tag
 | `frontend_layout_shift` | bool | false | Delayed-insert banner → CLS regression | S8 |
 | **LLM** | | | | |
 | `llm_latency_ms` | int | 0 | Added time-to-first-token | S9 |
-| `llm_degrade_tools` | bool | false | Model returns prose instead of tool calls | S9 |
-| `llm_hallucinate` | bool | false | Model invents a plausible-but-wrong PNR and itinerary | S9 |
+| `llm_degrade_tools` | bool | false | `mock-llm` returns prose instead of tool calls; `ai-support-service` records the dropped call as a failed `tool` span (§ 9.1) | S9 |
+| `llm_hallucinate` | bool | false | Model invents a plausible-but-wrong PNR and itinerary; `ai-support-service` tags the turn `answer_quality` (§ 9.1) | S9 |
 | `llm_error_rate` | float | 0 | `mock-llm` → 500 | S9 |
 | `llm_token_bloat` | bool | false | Verbose responses → visible token/cost spike | S9 |
 | **Meta** | | | | |

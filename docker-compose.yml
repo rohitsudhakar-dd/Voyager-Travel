@@ -606,6 +606,22 @@ services:
       DD_SERVICE_MAPPING: postgres:voyager-ai-support-postgres,redis:voyager-ai-support-redis
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
+      # LLM Observability. The service calls LLMObs.enable() itself, in
+      # app/llmobs.py. DD_LLMOBS_ENABLED is deliberately left empty rather than
+      # set to true: a truthy value makes ddtrace's own bootstrap enable the
+      # product first, with integrations on, which re-patches openai regardless
+      # of DD_TRACE_OPENAI_ENABLED below. Set it to false to switch LLM
+      # Observability off; anything truthy here doubles every completion.
+      DD_LLMOBS_ENABLED: ${DD_LLMOBS_ENABLED:-}
+      DD_LLMOBS_ML_APP: ${DD_LLMOBS_ML_APP:-voyager-support}
+      # ddtrace's openai integration emits an `llm` span of its own once LLM
+      # Observability is on, so every completion would be counted twice and
+      # every token and cost figure would read double. The service opens its
+      # own `chat.completion` span instead, and the hop to mock-llm is still
+      # traced by the httpx integration underneath the client.
+      DD_TRACE_OPENAI_ENABLED: "false"
+      LLM_COST_INPUT_USD_PER_MILLION: ${LLM_COST_INPUT_USD_PER_MILLION:-0.50}
+      LLM_COST_OUTPUT_USD_PER_MILLION: ${LLM_COST_OUTPUT_USD_PER_MILLION:-1.50}
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
       LLM_BASE_URL: ${LLM_BASE_URL:-http://mock-llm:4930/v1}
       LLM_API_KEY: ${LLM_API_KEY:-mock-key}

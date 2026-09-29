@@ -51,7 +51,7 @@ s ?=
 .PHONY: help bootstrap build up up-full up-one web-ui down nuke seed seed-verify reset \
         logs migrate healthcheck chaos chaos-reset scenario scenarios \
         dd-apply dd-sourcemaps demo-mode idle-mode test verify verify-tracing verify-streams deploy ps \
-        test-web test-node test-python test-go verify-edge
+        test-web test-node test-python test-go verify-edge verify-llmobs
 
 help: ## List available targets
 	@echo "Voyager -- make targets"
@@ -194,10 +194,14 @@ verify: ## Run the phase exit-criteria scripts against a running stack
 	@./scripts/verify-edge.sh
 	@echo
 	@echo "Span-level tracing checks are not run here: they stop and restart six"
-	@echo "services. Run them on their own with 'make verify-tracing'."
+	@echo "services. Run them on their own with 'make verify-tracing', and the"
+	@echo "LLM Observability checks with 'make verify-llmobs'."
 
 verify-tracing: ## Phase 8 exit criteria (stops and restarts services; takes minutes)
 	@./scripts/verify-tracing.sh
+
+verify-llmobs: ## Phase 10 LLM Observability (stops ai-support-service; sets chaos)
+	@./scripts/verify-llmobs.sh
 
 verify-streams: ## Phase 10 Data Streams and Kafka chaos (pauses a consumer group; takes minutes)
 	@./scripts/verify-streams.sh

@@ -404,6 +404,10 @@ LLM_PROVIDER=mock                # mock | openai
 LLM_BASE_URL=http://mock-llm:4930/v1
 LLM_API_KEY=mock-key
 LLM_MODEL=voyager-support-v1
+DD_LLMOBS_ML_APP=voyager-support # the ml_app LLM Observability groups the chains under
+DD_LLMOBS_ENABLED=               # leave empty; see § 7.3. Set to false to turn LLM Obs off
+LLM_COST_INPUT_USD_PER_MILLION=0.50    # tariff behind the cost annotated on each llm span
+LLM_COST_OUTPUT_USD_PER_MILLION=1.50   # the same two constants the D6 cost widget uses
 
 # ---- Load generation ----
 LOADGEN_API_ENABLED=true
@@ -440,6 +444,19 @@ DD_GIT_COMMIT_SHA=${DD_GIT_COMMIT_SHA}
 ```
 
 Put these in a Compose YAML anchor (`x-datadog-env: &datadog-env`) and merge into every service. Do not copy-paste them a dozen times.
+
+### 7.3 LLM Observability variables — `ai-support-service` only
+
+These four sit on `ai-support-service` in Compose and nowhere else. Two of them
+are counter-intuitive enough to be worth stating here rather than only in a
+comment, because both failure modes are silent.
+
+| Variable | Value | Why |
+|---|---|---|
+| `DD_LLMOBS_ML_APP` | `voyager-support` | The application the chains are grouped under. `LLMObs.enable()` refuses to start without it, and the service passes it explicitly so a missing variable cannot raise at import. |
+| `DD_LLMOBS_ENABLED` | **empty** | *Not* `true`. A truthy value makes `ddtrace/bootstrap/preload.py` call `LLMObs.enable()` before the application is imported, with integrations on — which patches `openai` explicitly and bypasses `DD_TRACE_OPENAI_ENABLED` below. The service's own `LLMObs.enable()` then returns early because the product is already enabled, and every completion is counted twice. Set it to `false` to switch LLM Observability off; leave it empty to have it on. |
+| `DD_TRACE_OPENAI_ENABLED` | `false` | With LLM Observability on, ddtrace's `openai` integration emits an `llm` span of its own for every completion, on top of the `chat.completion` span the service opens. Two spans per call means double the tokens and double the cost in the product. The hop to `mock-llm` is still traced, by the `httpx` integration underneath the client. |
+| `LLM_COST_{INPUT,OUTPUT}_USD_PER_MILLION` | `0.50` / `1.50` | The tariff the `total_cost` annotation on an `llm` span is computed from. Datadog derives no cost for a model it has never heard of, and `voyager-support-v1` is invented. The defaults are the same constants the "Estimated cost per hour" widget in `datadog/dashboards/d6-ai-support.json` applies to `voyager.support.tokens`, so the dashboard and the span agree on the price of a token. |
 
 ---
 

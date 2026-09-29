@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     dd_version: str = "dev"
     log_level: str = "INFO"
 
+    # DogStatsD. The Agent's container name, not localhost: the socket is on
+    # another container, and a client pointed at localhost reports nothing at
+    # all with no error to say so.
+    dd_dogstatsd_host: str = "datadog-agent"
+    dd_dogstatsd_port: int = 8125
+
     # Postgres -- this service owns support_conversations and support_messages.
     postgres_host: str = "postgres"
     postgres_port: int = 5432
@@ -40,6 +46,17 @@ class Settings(BaseSettings):
     llm_model: str = "voyager-support-v1"
     llm_timeout_seconds: float = 60.0
     llm_max_tool_rounds: int = 2
+
+    # LLM Observability. `ml_app` groups the traces in the product and is the
+    # one value LLMObs.enable() refuses to start without.
+    dd_llmobs_ml_app: str = "voyager-support"
+
+    # The tariff the cost annotation on an `llm` span is computed from. It is
+    # invented, because `voyager-support-v1` is invented -- but it is the same
+    # invention as the cost widget on datadog/dashboards/d6-ai-support.json,
+    # which is the point of it being configuration rather than a literal.
+    llm_cost_input_usd_per_million: float = 0.50
+    llm_cost_output_usd_per_million: float = 1.50
 
     # Downstream services the tools call. Nothing here mutates a booking
     # directly -- every change goes through booking-service (§ 1).

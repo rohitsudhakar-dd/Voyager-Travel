@@ -131,10 +131,24 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body()
         self._reply(b"{}")
 
+        if not body:
+            return
+
+        # LLM Observability does not travel with the traces. The tracer keeps
+        # the LLMObs span events in a separate writer and posts them as JSON
+        # through the Agent's EVP proxy, and the trace payload is stripped of
+        # the `_ml_obs.*` tags on the way past -- so the token counts and the
+        # cost only exist on this endpoint. Phase 10 asks us to prove they are
+        # there, and this is the only place they can be read without an
+        # application key.
+        if "api/v2/llmobs" in self.path:
+            self._collect_llmobs(body)
+            return
+
         # The tracers also post telemetry, runtime metrics and stats to this
         # host. Those are valid msgpack or JSON and would decode into
         # something that is simply not a list of traces.
-        if not body or "/traces" not in self.path:
+        if "/traces" not in self.path:
             return
         try:
             traces, _ = decode(body)
@@ -166,6 +180,21 @@ class Handler(BaseHTTPRequestHandler):
                     ),
                     flush=True,
                 )
+
+    def _collect_llmobs(self, body: bytes):
+        try:
+            payload = json.loads(body)
+        except ValueError as error:
+            print(f"# undecodable llmobs payload: {error}", file=sys.stderr, flush=True)
+            return
+
+        for event in payload.get("spans") or []:
+            if not isinstance(event, dict):
+                continue
+            # Marked, because these share a file with the APM span lines and
+            # an assertion that cannot tell them apart would count a `tool`
+            # span twice or look for token counts on the wrong one.
+            print(json.dumps({"llmobs": True, **event}, sort_keys=True), flush=True)
 
     def _body(self) -> bytes:
         """Reads the request body, chunked or not.
