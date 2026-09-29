@@ -13,7 +13,7 @@ import json
 import structlog
 from aiokafka import AIOKafkaConsumer
 
-from app import db, tracing
+from app import db, kafka_context, tracing
 from app.domain.states import BookingState, Trigger
 from app.errors import InvalidBookingTransitionError
 from app.kafka import envelope
@@ -45,6 +45,7 @@ async def run(brokers: str, stop: asyncio.Event) -> None:
             batch = await consumer.getmany(timeout_ms=1000, max_records=50)
             for _partition, messages in batch.items():
                 for message in messages:
+                    kafka_context.activate_consumed(message)
                     await _handle(message.value)
             if batch:
                 await consumer.commit()

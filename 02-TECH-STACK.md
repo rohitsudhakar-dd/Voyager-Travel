@@ -188,11 +188,17 @@ DD_TRACE_PROPAGATION_STYLE=datadog,tracecontext
 
 This keeps W3C `traceparent` alongside `x-datadog-*`, which is what lets browser RUM, Node, Go, Python, and Kafka headers all agree. Getting this wrong is the #1 cause of broken traces — if a trace looks truncated, check this first.
 
-For Kafka, `dd-trace` (Node), `dd-trace-go`, and `ddtrace` (Python) all inject context into message headers automatically when Data Streams Monitoring is enabled:
+For Kafka, context travels in the message headers when Data Streams Monitoring is enabled:
 
 ```
 DD_DATA_STREAMS_ENABLED=true
 ```
+
+`dd-trace` (Node, via kafkajs) and `dd-trace-go` inject and extract it automatically. **Python does not.** `ddtrace` 2.14 instruments `confluent_kafka` and nothing else, and Voyager's Python services use `aiokafka`, so their messages left with no headers at all — which broke two things quietly: every trace stopped dead at the publish, so a booking and the email it caused looked like unrelated requests, and Data Streams had no pathway to follow, so the topology it exists to draw came out empty.
+
+The three Python services therefore inject and extract by hand, in `app/kafka_context.py`, using the public `set_produce_checkpoint` / `set_consume_checkpoint` API together with `HTTPPropagator`. That produces exactly the header set kafkajs produces — `x-datadog-*`, `traceparent`, `tracestate` and `dd-pathway-ctx-base64` — so the pipeline is continuous rather than continuous-except-for-Python. Moving those services to `confluent_kafka` would get it for free, but rewriting the messaging layer of three services to buy instrumentation is a poor trade, and the checkpoint API exists precisely so unsupported clients do not have to.
+
+A consumer must activate the extracted context **before** handling the message; doing it afterwards parents the handler's spans to nothing, which looks identical to no propagation at all.
 
 ### 5.2 Entry-point span names
 

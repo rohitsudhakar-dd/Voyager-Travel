@@ -13,6 +13,7 @@ from typing import Any
 import structlog
 from aiokafka import AIOKafkaProducer
 
+from app import kafka_context
 from app.kafka import envelope
 
 log = structlog.get_logger()
@@ -77,7 +78,12 @@ class Producer:
             # for scenario S5.
             message = {"eventType": event_type, "payload": "<<malformed>>"}
 
-        await self._producer.send_and_wait(topic, value=message, key=key)
+        await self._producer.send_and_wait(
+            topic,
+            value=message,
+            key=key,
+            headers=kafka_context.produce_headers(topic),
+        )
         log.info(
             "Event published",
             kafka={

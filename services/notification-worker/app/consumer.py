@@ -19,6 +19,7 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.structs import ConsumerRecord
 
 from app import config as topics
+from app import kafka_context
 from app.chaos import Chaos
 from app.config import Settings
 from app.delivery import Deliverer, Outcome
@@ -172,6 +173,7 @@ class NotificationConsumer:
                 await consumer.commit({partition: records[-1].offset + 1})
 
     async def _handle(self, record: ConsumerRecord) -> None:
+        kafka_context.activate_consumed(record)
         await self._chaos.refresh()
 
         # Per-message processing delay, and the generic per-service one. Both are
@@ -208,6 +210,7 @@ class NotificationConsumer:
             topics.DLQ_TOPIC,
             key=record.key,
             value=json.dumps(payload).encode("utf-8"),
+            headers=kafka_context.produce_headers(topics.DLQ_TOPIC),
         )
 
     def _log_outcome(self, record: ConsumerRecord, outcome: Outcome) -> None:
