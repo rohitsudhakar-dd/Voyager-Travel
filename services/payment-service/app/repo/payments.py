@@ -12,9 +12,11 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
+from ddtrace import tracer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import tracing
 from app.domain.states import PaymentState, Trigger, next_state
 from app.errors import PaymentNotFoundError
 
@@ -243,26 +245,31 @@ async def transition(
     if target in (PaymentState.REFUNDED, PaymentState.PARTIALLY_REFUNDED):
         assignments.append("refunded_at = now()")
 
-    row = (
-        await db.execute(
-            text(
-                f"UPDATE payments SET {', '.join(assignments)} "
-                f"WHERE id = :id RETURNING {_COLUMNS}"
-            ),
-            params,
-        )
-    ).one()
+    # One span over both writes, because they are one act: the state and the
+    # ledger row it is explained by are written together or not at all.
+    with tracer.trace("payment.persist_ledger"):
+        row = (
+            await db.execute(
+                text(
+                    f"UPDATE payments SET {', '.join(assignments)} "
+                    f"WHERE id = :id RETURNING {_COLUMNS}"
+                ),
+                params,
+            )
+        ).one()
 
-    await append_event(
-        db,
-        payment_id=payment["id"],
-        event_type=str(trigger),
-        from_state=str(current),
-        to_state=str(target),
-        provider_payload=provider_payload,
-        trace_id=trace_id,
-    )
-    return _row(row)
+        await append_event(
+            db,
+            payment_id=payment["id"],
+            event_type=str(trigger),
+            from_state=str(current),
+            to_state=str(target),
+            provider_payload=provider_payload,
+            trace_id=trace_id,
+        )
+        updated = _row(row)
+        tracing.tag_payment(updated)
+    return updated
 
 
 async def append_event(

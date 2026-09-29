@@ -10,7 +10,9 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+from ddtrace import tracer
 
+from app import tracing
 from app.config import get_settings
 from app.errors import PaymentProviderError
 
@@ -46,16 +48,30 @@ async def charge(
     booking_id: str,
 ) -> dict[str, Any]:
     settings = get_settings()
-    return await _post(
-        f"{settings.payments_base_url}/v1/charges",
-        {
+    # Two spans rather than one, because they fail for unrelated reasons: the
+    # first is ours to get wrong, the second is the provider's, and
+    # `payment_latency_ms` only ever lands on the second.
+    with tracer.trace("payment.build_request"):
+        body = {
             "amount": amount_cents,
             "currency": currency,
             "card": card,
             "idempotency_key": idempotency_key,
             "metadata": {"bookingId": booking_id},
-        },
-    )
+        }
+
+    # Started without the context manager so the failure can be stamped before
+    # the span closes: on exit ddtrace overwrites `error.type` with its own
+    # module-qualified spelling of the class, and § 13.3 wants both sides of
+    # this hop naming the fault the same way.
+    span = tracer.trace("payment.authorize")
+    try:
+        return await _post(f"{settings.payments_base_url}/v1/charges", body)
+    except PaymentProviderError as exc:
+        tracing.record_error(exc.type, exc.message, exc, span=span)
+        raise
+    finally:
+        span.finish()
 
 
 async def capture(reference: str, amount_cents: int | None = None) -> dict[str, Any]:

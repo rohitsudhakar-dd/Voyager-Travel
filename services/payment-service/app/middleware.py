@@ -15,6 +15,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from app import tracing
+
 _request_id: ContextVar[str] = ContextVar("request_id", default="")
 
 # Liveness probes fire every ten seconds in every container. Logging them
@@ -58,6 +60,13 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         if quiet:
             return response
 
+        active_flags = (
+            runtime.chaos.active_flags() if runtime.chaos is not None else ""
+        )
+        # The same string on the span and in the log. Six months later it is
+        # the only way to tell a genuinely odd trace from a chaos artifact.
+        tracing.tag_root({"chaos.active_flags": active_flags})
+
         self._log.info(
             "Request completed",
             http={
@@ -69,10 +78,6 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             # Nanoseconds, because that is what Datadog's duration remapper
             # expects; anything else silently renders as the wrong magnitude.
             duration=time.perf_counter_ns() - started,
-            chaos={
-                "active_flags": runtime.chaos.active_flags()
-                if runtime.chaos is not None
-                else ""
-            },
+            chaos={"active_flags": active_flags},
         )
         return response

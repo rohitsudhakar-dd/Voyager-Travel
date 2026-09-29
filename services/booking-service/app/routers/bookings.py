@@ -9,7 +9,7 @@ import structlog
 from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel, EmailStr, Field
 
-from app import clients, db
+from app import clients, db, tracing
 from app.domain import validation
 from app.domain.states import BookingState, Trigger
 from app.errors import HoldExpiredError, ValidationError
@@ -148,6 +148,7 @@ async def create_booking(body: CreateBooking) -> dict:
         envelope.booking_payload(booking),
         correlation_id=current_request_id(),
     )
+    tracing.tag_booking(booking)
     log.info(
         "Booking created",
         booking={
@@ -248,6 +249,7 @@ async def set_passengers(booking_id: str, body: SetPassengers) -> dict:
             session, booking_id=booking_id, passengers=submitted
         )
 
+    tracing.tag_booking(booking)
     log.info(
         "Passengers recorded",
         booking={"id": booking_id, "state": booking["state"]},
@@ -317,6 +319,7 @@ async def set_ancillaries(booking_id: str, body: SetAncillaries) -> dict:
             booking_id=booking_id,
         )
 
+    tracing.tag_booking(booking)
     log.info(
         "Ancillaries priced",
         booking={"id": booking_id, "total_cents": booking["total_cents"]},
@@ -412,6 +415,13 @@ async def cancel_booking(booking_id: str, body: Cancel) -> dict:
         {
             "template": "booking_cancelled",
             "recipient": booking["contact_email"],
+            # Alongside `variables` rather than inside it: variables is the
+            # template's data, and a template that never renders a booking id
+            # should not be handed one. notification-worker has no database,
+            # so these two are the only way its spans can carry booking.id
+            # and product.type.
+            "bookingId": booking_id,
+            "productType": booking["product_type"],
             "variables": {
                 "pnr": booking.get("pnr") or "",
                 "refundCents": refund_cents,
@@ -450,6 +460,7 @@ async def list_bookings(
             raise ValidationError("A PNR lookup also needs lastName.")
         async with db.session() as session:
             booking = await booking_repo.get_by_pnr(session, pnr, lastName)
+        tracing.tag_booking(booking)
         return {
             "bookings": [_public(booking, items=await _items(booking["id"]))],
             "count": 1,
@@ -458,6 +469,7 @@ async def list_bookings(
     if not user_id:
         raise ValidationError("Provide either user_id, or pnr with lastName.")
 
+    tracing.tag_root({"usr.id": user_id})
     n_plus_one = runtime.chaos.is_enabled("db_n_plus_one")
     async with db.session() as session:
         found = await booking_repo.list_for_user(
@@ -475,6 +487,7 @@ async def list_bookings(
 async def get_booking(booking_id: str) -> dict:
     async with db.session() as session:
         booking = await booking_repo.get(session, booking_id)
+    tracing.tag_booking(booking)
     return _public(
         booking,
         items=await _items(booking_id),

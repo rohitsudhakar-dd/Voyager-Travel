@@ -23,7 +23,7 @@ s ?=
 
 .PHONY: help bootstrap build up up-full up-one web-ui down nuke seed seed-verify reset \
         logs migrate healthcheck chaos chaos-reset scenario scenarios \
-        dd-apply dd-sourcemaps demo-mode idle-mode test verify deploy ps
+        dd-apply dd-sourcemaps demo-mode idle-mode test verify verify-tracing deploy ps
 
 help: ## List available targets
 	@echo "Voyager -- make targets"
@@ -157,6 +157,11 @@ verify: ## Run the phase exit-criteria scripts against a running stack
 	@./scripts/verify-search.sh
 	@./scripts/verify-booking.sh
 	@./scripts/verify-gateway.sh
+	@echo
+	@echo "Span-level tracing checks are not run here: they stop and restart six"
+	@echo "services. Run them on their own with 'make verify-tracing'."
+
+verify-tracing: ## Phase 8 exit criteria (stops and restarts services; takes minutes)
 	@./scripts/verify-tracing.sh
 
 deploy: ## Pull, stamp DD_VERSION, build, rolling restart, migrate, healthcheck

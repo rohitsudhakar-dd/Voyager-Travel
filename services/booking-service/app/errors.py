@@ -160,6 +160,7 @@ class DatabaseError(VoyagerError):
 def install(app, logger) -> None:
     """Register the handlers that turn exceptions into the § 13.2 envelope."""
 
+    from app import tracing
     from app.middleware import current_request_id
 
     @app.exception_handler(VoyagerError)
@@ -167,13 +168,16 @@ def install(app, logger) -> None:
         request_id = current_request_id()
         # 5xx is ours to fix and belongs at error level; 4xx is the client
         # telling us something we already model, and would otherwise drown the
-        # error rate in expired holds.
+        # error rate in expired holds. The span follows the same line (§ 13.3),
+        # so an expired hold never counts against the booking SLO.
         event = logger.error if exc.status_code >= 500 else logger.warning
         event(
             "Request failed",
             error={"kind": exc.type, "message": exc.message},
             request_id=request_id,
         )
+        if exc.status_code >= 500:
+            tracing.record_error(exc.type, exc.message, exc)
         return JSONResponse(
             status_code=exc.status_code,
             content=exc.envelope(request_id),
@@ -187,6 +191,11 @@ def install(app, logger) -> None:
             error={"kind": type(exc).__name__, "message": str(exc)},
             request_id=request_id,
         )
+        # The class name and the base message, not `str(exc)`. An untyped
+        # failure is a bug to be found from its stack trace, and a KeyError
+        # that names a booking id would file one Error Tracking issue per
+        # request.
+        tracing.record_error(type(exc).__name__, VoyagerError.message, exc)
         return JSONResponse(
             status_code=500,
             content=VoyagerError().envelope(request_id),

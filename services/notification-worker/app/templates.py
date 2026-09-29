@@ -14,6 +14,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ddtrace import tracer
+
+from app import tracing
+
 # Event type -> template, for events that no producer asks about explicitly.
 #
 # booking-service and payment-service already request `booking_confirmed`,
@@ -89,17 +93,30 @@ def _recipient(payload: dict[str, Any]) -> str:
     return recipient
 
 
+@tracer.wrap("notification.render_itinerary")
 def render_itinerary(payload: dict[str, Any]) -> str:
     """The confirmation email body.
 
     Built from whatever the event carries: an event that omits the line items
     still produces a sensible email rather than a stack trace.
     """
-    pnr = _first(payload, "pnr") or "pending"
-    product = _first(payload, "productType", "product_type") or "trip"
+    pnr = _first(payload, "pnr")
+    product = _first(payload, "productType", "product_type")
+    # bookingId and productType ride on the event beside `variables` rather
+    # than inside it, and the merge above lifts them in. This worker has no
+    # database, so the event is the only place these can come from.
+    tracing.tag_root(
+        {
+            "booking.pnr": pnr,
+            "booking.id": _first(payload, "bookingId", "booking_id"),
+            "product.type": product,
+        }
+    )
+    tracing.tag_chaos()
+
     lines = [
-        f"Booking reference: {pnr}",
-        f"Product: {product}",
+        f"Booking reference: {pnr or 'pending'}",
+        f"Product: {product or 'trip'}",
     ]
 
     items = _first(payload, "items", "bookingItems", "booking_items") or []

@@ -9,7 +9,7 @@ import structlog
 from fastapi import APIRouter, Header, Response
 from pydantic import BaseModel, Field
 
-from app import clients, db
+from app import clients, db, tracing
 from app.config import get_settings
 from app.domain.states import PaymentState, Trigger
 from app.errors import (
@@ -84,6 +84,10 @@ async def authorize(
     endpoint = "POST /v1/payments/authorize"
     request_hash = idempotency.fingerprint(body.model_dump())
 
+    # Before the idempotency check, so a replay and a key collision are both
+    # findable by the booking they were about.
+    tracing.tag_root({"booking.id": body.bookingId})
+
     async with db.session() as session:
         replay = await idempotency.find(
             session, key=idempotency_key, endpoint=endpoint, request_hash=request_hash
@@ -101,6 +105,7 @@ async def authorize(
         return replay["body"]
 
     booking = await _fetch_booking(body.bookingId)
+    tracing.tag_booking(booking)
     _assert_authorizable(booking, body)
 
     # booking-service owns the booking's state, so the move to
@@ -168,6 +173,7 @@ async def authorize(
 async def capture(payment_id: str, body: Capture) -> dict:
     async with db.session() as session:
         payment = await payment_repo.get(session, payment_id)
+    tracing.tag_payment(payment)
 
     provider = await clients.capture(payment["provider_reference"], body.amountCents)
 
@@ -198,6 +204,7 @@ async def capture(payment_id: str, body: Capture) -> dict:
 async def refund(payment_id: str, body: Refund) -> dict:
     async with db.session() as session:
         payment = await payment_repo.get(session, payment_id)
+    tracing.tag_payment(payment)
 
     # § 15: refunds are capped at what was actually captured. Anything else
     # is a path to paying a customer money they never gave us.
@@ -229,6 +236,9 @@ async def refund(payment_id: str, body: Refund) -> dict:
     # the address lives on the booking. Refunds are rare enough that one read
     # here costs nothing worth saving.
     booking = await _fetch_booking(payment["booking_id"])
+    # The only path where this service sees a PNR: it is issued on
+    # confirmation, which is long after the card was charged.
+    tracing.tag_booking(booking)
 
     await runtime.producer.send(
         envelope.TOPIC_PAYMENTS,
@@ -256,6 +266,7 @@ async def complete_3ds(payment_id: str, body: Complete3DS) -> dict:
     """Finish a 3DS challenge and resubmit the authorization."""
     async with db.session() as session:
         payment = await payment_repo.get(session, payment_id)
+    tracing.tag_payment(payment)
 
     if payment["state"] != PaymentState.REQUIRES_3DS:
         raise ValidationError(
@@ -305,6 +316,7 @@ async def provider_webhook(payload: dict[str, Any]) -> dict:
         payment = await payment_repo.get_by_provider_reference(session, reference)
     if payment is None:
         return {"status": "ignored", "reason": "unknown charge"}
+    tracing.tag_payment(payment)
 
     if payment["state"] not in (PaymentState.AUTHORIZING, PaymentState.REQUIRES_3DS):
         log.info(
@@ -330,11 +342,13 @@ async def get_payment_for_booking(booking_id: str) -> dict:
     between HELD and the moment the traveller enters a card -- so this answers
     with a null payment rather than a 404.
     """
+    tracing.tag_root({"booking.id": booking_id})
     async with db.session() as session:
         payment = await payment_repo.latest_for_booking(session, booking_id)
         if payment is None:
             return {"bookingId": booking_id, "payment": None}
         events = await payment_repo.events_for(session, payment["id"])
+    tracing.tag_payment(payment)
     return {"bookingId": booking_id, "payment": {**_public(payment), "events": events}}
 
 
@@ -345,6 +359,7 @@ async def get_saved_methods(user_id: str) -> dict:
     There is no card vault behind this. It reads the payments ledger, which
     only ever held the last four digits.
     """
+    tracing.tag_root({"usr.id": user_id})
     async with db.session() as session:
         methods = await payment_repo.methods_for_user(session, user_id)
     return {"userId": user_id, "methods": methods}
@@ -355,6 +370,7 @@ async def get_payment(payment_id: str) -> dict:
     async with db.session() as session:
         payment = await payment_repo.get(session, payment_id)
         events = await payment_repo.events_for(session, payment_id)
+    tracing.tag_payment(payment)
     return {**_public(payment), "events": events}
 
 

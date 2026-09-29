@@ -13,7 +13,7 @@ import json
 import structlog
 from aiokafka import AIOKafkaConsumer
 
-from app import db
+from app import db, tracing
 from app.domain.states import BookingState, Trigger
 from app.errors import InvalidBookingTransitionError
 from app.kafka import envelope
@@ -116,6 +116,12 @@ async def confirm(booking_id: str, *, correlation_id: str = "") -> dict:
             "passengers": await booking_repo.passengers_for(session, booking_id),
         }
 
+    # The PNR is only allocated after `booking.state_transition` has closed, so
+    # it is tagged from here. On the POST /confirm path that reaches the
+    # request span; consumed from Kafka there is no span left to carry it,
+    # because ddtrace 2.14 has no aiokafka integration to open one.
+    tracing.tag_booking(booking)
+
     if runtime.chaos.is_enabled("booking_memory_leak"):
         # Retained forever, keyed per booking, reachable from a module-level
         # object for the life of the process. The heap climb is genuine, so
@@ -136,6 +142,13 @@ async def confirm(booking_id: str, *, correlation_id: str = "") -> dict:
         {
             "template": "booking_confirmed",
             "recipient": booking["contact_email"],
+            # Alongside `variables` rather than inside it: variables is the
+            # template's data, and a template that never renders a booking id
+            # should not be handed one. notification-worker has no database,
+            # so these two are the only way its spans can carry booking.id
+            # and product.type.
+            "bookingId": booking_id,
+            "productType": booking["product_type"],
             "variables": {
                 "pnr": pnr,
                 "totalCents": booking["total_cents"],
@@ -168,6 +181,13 @@ async def fail(booking_id: str, payload: dict, *, correlation_id: str = "") -> d
         {
             "template": "payment_failed",
             "recipient": booking["contact_email"],
+            # Alongside `variables` rather than inside it: variables is the
+            # template's data, and a template that never renders a booking id
+            # should not be handed one. notification-worker has no database,
+            # so these two are the only way its spans can carry booking.id
+            # and product.type.
+            "bookingId": booking_id,
+            "productType": booking["product_type"],
             "variables": {
                 "declineCode": payload.get("declineCode"),
                 "holdExpiresAt": booking.get("hold_expires_at"),

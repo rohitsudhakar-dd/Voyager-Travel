@@ -12,10 +12,12 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
+from ddtrace import tracer
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import tracing
 from app.domain import pnr as pnr_gen
 from app.domain.states import BookingState, Trigger, next_state
 from app.errors import BookingNotFoundError
@@ -299,7 +301,9 @@ async def transition(
     """Move a booking to its next state, or refuse.
 
     The state is resolved before the write, so an illegal transition never
-    reaches the database at all.
+    reaches the database at all -- and never opens a span, because a refusal is
+    a 409 rather than a fault and a span that exits on an exception is marked
+    errored regardless.
     """
     current = BookingState(booking["state"])
     target = next_state(current, trigger)
@@ -316,16 +320,19 @@ async def transition(
     if target in (BookingState.EXPIRED, BookingState.CANCELLED):
         assignments.append("hold_expires_at = NULL")
 
-    row = (
-        await db.execute(
-            text(
-                f"UPDATE bookings SET {', '.join(assignments)} "
-                f"WHERE id = :id RETURNING {_BOOKING_COLUMNS}"
-            ),
-            params,
-        )
-    ).one()
-    return _row_to_booking(row)
+    with tracer.trace("booking.state_transition"):
+        row = (
+            await db.execute(
+                text(
+                    f"UPDATE bookings SET {', '.join(assignments)} "
+                    f"WHERE id = :id RETURNING {_BOOKING_COLUMNS}"
+                ),
+                params,
+            )
+        ).one()
+        updated = _row_to_booking(row)
+        tracing.tag_transition(updated)
+    return updated
 
 
 async def set_hold_expiry(

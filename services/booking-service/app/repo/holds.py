@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from uuid import UUID, uuid4
 
+from ddtrace import tracer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +23,7 @@ CONTENTION_HOLD_SECONDS = 0.75
 SWEEP_BATCH_SIZE = 500
 
 
+@tracer.wrap("booking.acquire_hold_lock")
 async def _acquire_advisory_lock(
     db: AsyncSession, resource_type: str, resource_id: int
 ) -> None:
@@ -29,6 +31,10 @@ async def _acquire_advisory_lock(
 
     `pg_advisory_xact_lock` releases at commit or rollback, so no code path
     can leak the lock by forgetting to release it.
+
+    The span covers only the wait for the lock, not the work done under it, so
+    `hold_lock_contention` shows up as this span's duration on the requests
+    that queued rather than on the one that was already holding it.
     """
     await db.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
@@ -54,13 +60,17 @@ async def acquire(
         await asyncio.sleep(CONTENTION_HOLD_SECONDS)
 
     table, column = _resource_table(resource_type)
-    available = (
-        await db.execute(
-            text(f"SELECT {column} FROM {table} WHERE id = :id"),
-            {"id": resource_id},
-        )
-    ).scalar_one_or_none()
+    with tracer.trace("booking.validate_availability"):
+        available = (
+            await db.execute(
+                text(f"SELECT {column} FROM {table} WHERE id = :id"),
+                {"id": resource_id},
+            )
+        ).scalar_one_or_none()
 
+    # Refused outside the span. A sold-out seat is a 409 the traveller can act
+    # on, and § 13.3 keeps business outcomes off the error rate -- a span that
+    # exits on an exception is marked errored whatever the exception meant.
     if available is None:
         raise InventoryUnavailableError(
             "That flight or room no longer exists.",
@@ -76,35 +86,36 @@ async def acquire(
             }
         )
 
-    # Inventory moves at hold time, not at confirmation. Anything else sells
-    # the same seat twice while the traveller is entering their card details.
-    await db.execute(
-        text(f"UPDATE {table} SET {column} = {column} - :quantity WHERE id = :id"),
-        {"id": resource_id, "quantity": quantity},
-    )
-
     hold_id = uuid4()
-    await db.execute(
-        text(
-            """
-            INSERT INTO inventory_holds (
-                id, booking_id, resource_type, resource_id, quantity,
-                state, expires_at, created_at
-            ) VALUES (
-                :id, :booking_id, :resource_type, :resource_id, :quantity,
-                'active', :expires_at, now()
-            )
-            """
-        ),
-        {
-            "id": hold_id,
-            "booking_id": UUID(booking_id),
-            "resource_type": resource_type,
-            "resource_id": resource_id,
-            "quantity": quantity,
-            "expires_at": expires_at,
-        },
-    )
+    with tracer.trace("booking.hold_inventory"):
+        # Inventory moves at hold time, not at confirmation. Anything else
+        # sells the same seat twice while the traveller is entering their card
+        # details.
+        await db.execute(
+            text(f"UPDATE {table} SET {column} = {column} - :quantity WHERE id = :id"),
+            {"id": resource_id, "quantity": quantity},
+        )
+        await db.execute(
+            text(
+                """
+                INSERT INTO inventory_holds (
+                    id, booking_id, resource_type, resource_id, quantity,
+                    state, expires_at, created_at
+                ) VALUES (
+                    :id, :booking_id, :resource_type, :resource_id, :quantity,
+                    'active', :expires_at, now()
+                )
+                """
+            ),
+            {
+                "id": hold_id,
+                "booking_id": UUID(booking_id),
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+                "quantity": quantity,
+                "expires_at": expires_at,
+            },
+        )
     return {
         "id": str(hold_id),
         "resourceType": resource_type,

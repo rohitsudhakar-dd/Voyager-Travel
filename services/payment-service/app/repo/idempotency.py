@@ -17,6 +17,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from ddtrace import tracer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,27 +45,31 @@ async def find(
     db: AsyncSession, *, key: str, endpoint: str, request_hash: str
 ) -> dict | None:
     """Return the stored response for a replay, or raise on a key collision."""
-    row = (
-        await db.execute(
-            text(
-                """
-                SELECT endpoint, request_hash, response_status, response_body,
-                       expires_at
-                FROM idempotency_records WHERE key = :key
-                """
-            ),
-            {"key": key},
-        )
-    ).one_or_none()
-    if row is None:
-        return None
+    with tracer.trace("payment.idempotency_check"):
+        row = (
+            await db.execute(
+                text(
+                    """
+                    SELECT endpoint, request_hash, response_status, response_body,
+                           expires_at
+                    FROM idempotency_records WHERE key = :key
+                    """
+                ),
+                {"key": key},
+            )
+        ).one_or_none()
+        if row is None:
+            return None
 
-    if row.expires_at is not None and row.expires_at < datetime.now(timezone.utc):
-        await db.execute(
-            text("DELETE FROM idempotency_records WHERE key = :key"), {"key": key}
-        )
-        return None
+        if row.expires_at is not None and row.expires_at < datetime.now(timezone.utc):
+            await db.execute(
+                text("DELETE FROM idempotency_records WHERE key = :key"), {"key": key}
+            )
+            return None
 
+    # Refused outside the span. A caller reusing a key with a different body is
+    # a 409, and § 13.3 keeps that off the error rate -- a span that exits on an
+    # exception is marked errored whatever the exception meant.
     if row.endpoint != endpoint or row.request_hash != request_hash:
         raise DuplicateIdempotencyKeyError(
             details={"key": key, "endpoint": row.endpoint},
