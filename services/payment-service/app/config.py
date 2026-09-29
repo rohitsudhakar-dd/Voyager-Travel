@@ -1,4 +1,4 @@
-"""Runtime configuration for booking-service.
+"""Runtime configuration for payment-service.
 
 Every value comes from the environment. Nothing is hardcoded, and DD_SERVICE is
 supplied by Compose rather than by the application (02-TECH-STACK.md § 12).
@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore", case_sensitive=False)
 
     # Identity
-    dd_service: str = "voyager-booking"
+    dd_service: str = "voyager-payment"
     dd_env: str = "demo"
     dd_version: str = "dev"
 
@@ -31,16 +31,15 @@ class Settings(BaseSettings):
     kafka_brokers: str = "kafka:9092"
 
     # Upstreams
-    search_base_url: str = "http://search-service:4010"
-    pricing_base_url: str = "http://pricing-service:4020"
+    payments_base_url: str = "http://mock-payments:4910"
+    booking_base_url: str = "http://booking-service:4030"
 
-    port: int = 4030
+    port: int = 4040
 
-    # § 15: fifteen minutes, non-extendable. Overridable only so the exit
-    # criteria can watch a hold expire without waiting a quarter of an hour.
-    hold_ttl_minutes: int = 15
+    # § 3.2: idempotency records are honoured for 24 hours, matching what
+    # mock-payments promises its callers.
+    idempotency_ttl_hours: int = 24
 
-    # How long a readiness probe waits on any single dependency.
     readiness_timeout_seconds: float = 2.0
 
     @property

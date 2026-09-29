@@ -159,6 +159,14 @@ def load(config, connection) -> None:
             stage.rows = db.copy_rows(connection, table, columns, rows(factory))
         connection.commit()
 
+    # An active hold means a seat is genuinely spoken for, so the seeded
+    # inventory has to reflect that. Without this the world is inconsistent
+    # the moment the sweeper runs: it hands back seats that were never taken
+    # and trips ck_flights_seats.
+    with db.Stage("apply_active_holds") as stage:
+        stage.rows = _apply_active_holds(connection)
+    connection.commit()
+
     # ------------------------------------------------------------ support --
     print("\nsupport")
     conversations = support.pick_conversation_bookings(
@@ -213,6 +221,46 @@ EXPECTED = {
     "voyager.flights": 150_000,
     "voyager.fare_rules": 2_000,
 }
+
+
+def _apply_active_holds(connection) -> int:
+    """Debit seeded inventory for every hold that is still active.
+
+    Clamped with GREATEST so a flight that is heavily held cannot go
+    negative; the alternative is a check-constraint failure in the middle of
+    a seed, which is far harder to read than a flight that simply sells out.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            WITH held AS (
+                SELECT resource_id, SUM(quantity) AS seats
+                FROM voyager.inventory_holds
+                WHERE state = 'active' AND resource_type = 'flight_seat'
+                GROUP BY resource_id
+            )
+            UPDATE voyager.flights f
+            SET seats_available = GREATEST(f.seats_available - held.seats, 0)
+            FROM held WHERE f.id = held.resource_id
+            """
+        )
+        flights = cursor.rowcount or 0
+
+        cursor.execute(
+            """
+            WITH held AS (
+                SELECT resource_id, SUM(quantity) AS rooms
+                FROM voyager.inventory_holds
+                WHERE state = 'active' AND resource_type = 'hotel_room'
+                GROUP BY resource_id
+            )
+            UPDATE voyager.rate_plans r
+            SET rooms_available = GREATEST(r.rooms_available - held.rooms, 0)
+            FROM held WHERE r.id = held.resource_id
+            """
+        )
+        rooms = cursor.rowcount or 0
+    return flights + rooms
 
 
 def verify(config, connection) -> bool:

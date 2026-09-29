@@ -193,7 +193,7 @@ services:
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      PAYMENT_WEBHOOK_URL: http://payment-service:4040/webhooks/payments
+      PAYMENT_WEBHOOK_URL: http://payment-service:4040/v1/webhooks/provider
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4910/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s
@@ -305,6 +305,24 @@ services:
       start_period: 15s
     mem_limit: 512m
 
+  # kafka-init creates every topic in 05-FUNCTIONALITY.md § 6 and exits. It
+  # reuses the broker image purely for the CLI tools, so there is nothing to
+  # build and nothing extra to pull.
+  kafka-init:
+    image: apache/kafka:3.8.1
+    container_name: kafka-init
+    networks: [voyager]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER: kafka:9092
+    entrypoint: ["/bin/bash", "/scripts/create-topics.sh"]
+    volumes:
+      - ./infra/kafka:/scripts:ro
+    restart: "no"
+    mem_limit: 512m
+
   booking-service:
     build:
       context: ./services/booking-service
@@ -312,14 +330,62 @@ services:
     hostname: booking-service
     restart: unless-stopped
     networks: [voyager]
-    depends_on: *data-layer-ready
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      search-service:
+        condition: service_healthy
+      pricing-service:
+        condition: service_healthy
     environment:
       <<: *data-env
       DD_SERVICE: voyager-booking
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
+      SEARCH_BASE_URL: http://search-service:4010
+      PRICING_BASE_URL: http://pricing-service:4020
+      HOLD_TTL_MINUTES: ${HOLD_TTL_MINUTES:-15}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4030/health').read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    mem_limit: 512m
+
+  payment-service:
+    build:
+      context: ./services/payment-service
+    container_name: payment-service
+    hostname: payment-service
+    restart: unless-stopped
+    networks: [voyager]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      mock-payments:
+        condition: service_healthy
+    environment:
+      <<: *data-env
+      DD_SERVICE: voyager-payment
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+      PAYMENTS_BASE_URL: http://mock-payments:4910
+      BOOKING_BASE_URL: http://booking-service:4030
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4040/health').read()\""]
       interval: 10s
       timeout: 5s
       retries: 6

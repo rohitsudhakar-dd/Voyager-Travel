@@ -10,7 +10,7 @@ export const config = {
 
   /** Where the asynchronous authorization result is delivered. */
   webhookUrl:
-    process.env.PAYMENT_WEBHOOK_URL ?? 'http://payment-service:4040/webhooks/payments',
+    process.env.PAYMENT_WEBHOOK_URL ?? 'http://payment-service:4040/v1/webhooks/provider',
   webhookMinDelayMs: Number(process.env.PAYMENT_WEBHOOK_MIN_DELAY_MS ?? 1_000),
   webhookMaxDelayMs: Number(process.env.PAYMENT_WEBHOOK_MAX_DELAY_MS ?? 3_000),
 

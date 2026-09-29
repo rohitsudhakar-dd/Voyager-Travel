@@ -1,0 +1,6 @@
+# Test-only dependencies. Kept out of requirements.in so the runtime image
+# does not ship a test runner.
+-c requirements.txt
+
+pytest~=8.3.0
+pytest-asyncio~=0.24.0

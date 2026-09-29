@@ -124,12 +124,19 @@ test: ## Run all four test suites
 		docker run --rm -v "$(PWD)/services/$$svc":/src -w /src golang:1.23-alpine \
 			sh -c 'go vet ./... && go test ./...' || exit 1; \
 	done
-	@echo "== python, typescript =="
-	@echo "not yet implemented (phases 4, 5, 7)"
+	@for svc in booking-service payment-service; do \
+		echo "== $$svc =="; \
+		docker run --rm -v "$(PWD)/services/$$svc":/app -w /app python:3.12-slim \
+			sh -c 'pip install -q -r requirements.txt -r requirements-dev.txt && python -m pytest' \
+			|| exit 1; \
+	done
+	@echo "== typescript =="
+	@echo "not yet implemented (phases 5, 7)"
 
 verify: ## Run the phase exit-criteria scripts against a running stack
 	@./scripts/verify-mocks.sh
 	@./scripts/verify-search.sh
+	@./scripts/verify-booking.sh
 
 deploy: ## Pull, stamp DD_VERSION, build, rolling restart, migrate, healthcheck
 	@echo "not yet implemented (phase 13)"

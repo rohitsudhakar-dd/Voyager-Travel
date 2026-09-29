@@ -95,6 +95,7 @@ These exist specifically to make a single frontend request fan out widely — wh
 | `POST` | `/bookings/{id}/hold` | Reserves inventory, 15-min TTL → `HELD`, returns `holdExpiresAt` |
 | `PUT` | `/bookings/{id}/passengers` | Array of passenger objects, validated |
 | `PUT` | `/bookings/{id}/ancillaries` | `{seats:[…], baggage:[…], roomUpgrade:…}` — re-prices |
+| `POST` | `/bookings/{id}/authorizing` | Internal. `payment-service` calls this before charging a card: `HELD → PENDING_PAYMENT`, or `FAILED → PENDING_PAYMENT` on a retry. Booking state is owned by `booking-service`, so this is the only place that decides whether a booking may enter payment, and a lapsed hold is refused here rather than after the money has moved. |
 | `POST` | `/bookings/{id}/confirm` | `{paymentId}` → `CONFIRMED`, issues PNR |
 | `GET` | `/bookings/{id}` | Full booking |
 | `GET` | `/bookings?pnr=K8M2QR&lastName=Smith` | Guest lookup — no auth required |

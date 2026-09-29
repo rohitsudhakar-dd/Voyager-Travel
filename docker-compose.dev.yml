@@ -36,6 +36,14 @@ services:
     ports:
       - "127.0.0.1:4020:4020"
 
+  booking-service:
+    ports:
+      - "127.0.0.1:4030:4030"
+
+  payment-service:
+    ports:
+      - "127.0.0.1:4040:4040"
+
   # The mocks are published so you can curl a provider directly while
   # debugging, without going through search-service.
   mock-gds:
