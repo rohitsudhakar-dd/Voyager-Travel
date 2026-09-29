@@ -109,12 +109,16 @@ These exist specifically to make a single frontend request fan out widely — wh
 | `POST` | `/payments/authorize` | `{bookingId, amount, currency, card:{…}, idempotencyKey}`. Requires `Idempotency-Key` header too; body and header must match. |
 | `POST` | `/payments/{id}/3ds/complete` | `{challengeResponse}` — the step-up path |
 | `GET` | `/payments/{id}` | Status + event history |
+| `GET` | `/payments/by-booking/{bookingId}` | Internal. The latest attempt against a booking, for `GET /bff/booking/{idOrPnr}`. A booking with no payment yet answers `{payment: null}` rather than 404 — that is every booking between `HELD` and the moment a card is entered. |
+| `GET` | `/payments/methods/{userId}` | Internal. "Saved methods" for `GET /bff/account`. Voyager keeps no card vault; this is derived from the payments ledger, which only ever stored `card_last4` and `card_brand`. Nothing it returns can be used to charge anyone. |
 
 ### 2.7 Loyalty & support
 
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/loyalty/me` | Balance, tier, progress to next tier, recent transactions |
+| `POST` | `/loyalty/preview` | Internal. `{userId, amountCents, currency}` → the points this spend would earn and the tier it would leave the traveller on. Drives the "points preview" fan-out of `POST /bff/checkout/init`. Calculation only; it writes nothing, and a guest (`userId: null`) gets the standard-tier rate. |
+| `GET` | `/loyalty/{userId}/accruals/{bookingId}` | Internal. The accrual recorded for one booking, for `GET /bff/booking/{idOrPnr}`. Accrual is asynchronous, so a freshly confirmed booking legitimately answers `{accrual: null}` until the consumer catches up. |
 | `POST` | `/support/conversations` | → `{conversationId}` |
 | `POST` | `/support/conversations/{id}/messages` | `{content}` → SSE stream of tokens, tool-call events, and a final message |
 | `GET` | `/support/conversations/{id}` | Full history |
@@ -464,6 +468,8 @@ This is the app's highest-volume path and the one you'll demo most, so it's spec
 2. `search-service` normalizes the request into a canonical form (sorted filters, dates to UTC, uppercase codes) and hashes it → `search:flights:<sha256[:16]>`.
 3. **Cache lookup** (span `search.cache_lookup`). Hit → return with `cacheHit: true`, TTL 120 s. This is why the second identical search is 20× faster, and it makes the `redis_disabled` flag dramatic.
 4. **Miss** → `search.fanout` span: four parallel calls to `mock-gds`, one child span each, tagged `gds.provider`. 3-second per-provider timeout; partial results are acceptable and reported in `providersResponded`.
+
+   > **The timeout and `gds_latency_ms` interact.** Below 3000 the flag is a slowdown and `providersResponded` stays at 4; at 3000 providers sit exactly on the deadline and search flips between slow and `GdsUnavailable`; above 3000 it is an outage, not a slowdown. S1 uses 1500 deliberately, because the story it tells is "this is slow and it is not our fault", and an outage tells a different one.
 5. **Normalize** (span `search.normalize_results`) — map all four provider schemas, including `TRVP`'s alternate shape, into the canonical offer model.
 6. **Batch price** (span `search.price_results`) — one call to `pricing-service` `POST /v1/price/batch` with up to 50 offers. Inside pricing: `pricing.load_rules` (from memory), `pricing.evaluate_fare_rules`, `pricing.apply_taxes`.
 7. Sort, store the full result set in Redis, return the first page.

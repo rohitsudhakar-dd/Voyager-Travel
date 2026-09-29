@@ -15,8 +15,8 @@ DATA_LAYER   := postgres redis kafka
 s ?=
 
 .PHONY: help bootstrap build up up-full up-one down nuke seed seed-verify reset \
-        logs migrate healthcheck chaos-reset scenario dd-apply dd-sourcemaps \
-        demo-mode idle-mode test verify deploy ps
+        logs migrate healthcheck chaos chaos-reset scenario scenarios \
+        dd-apply dd-sourcemaps demo-mode idle-mode test verify deploy ps
 
 help: ## List available targets
 	@echo "Voyager -- make targets"
@@ -91,11 +91,18 @@ reset: ## nuke + up + migrate + seed -- the "make it clean" button
 
 # ------------------------------------------------------------------ chaos --
 
-chaos-reset: ## Clear every chaos flag
-	@echo "not yet implemented (phase 6)"
+chaos: ## Show every chaos flag that is currently active
+	@./scripts/chaos.sh status
+
+chaos-reset: ## Clear every chaos flag and undo its side effects
+	@./scripts/chaos.sh reset
 
 scenario: ## Apply a composite scenario: make scenario s=S4
-	@echo "not yet implemented (phase 6)"
+	@test -n "$(s)" || { echo "usage: make scenario s=<S1..S10>"; exit 1; }
+	@./scripts/chaos.sh apply $(s)
+
+scenarios: ## List the composite scenarios and which one is active
+	@./scripts/chaos.sh scenarios
 
 # ------------------------------------------------------------- datadog --
 
@@ -137,6 +144,7 @@ verify: ## Run the phase exit-criteria scripts against a running stack
 	@./scripts/verify-mocks.sh
 	@./scripts/verify-search.sh
 	@./scripts/verify-booking.sh
+	@./scripts/verify-gateway.sh
 
 deploy: ## Pull, stamp DD_VERSION, build, rolling restart, migrate, healthcheck
 	@echo "not yet implemented (phase 13)"

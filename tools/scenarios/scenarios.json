@@ -1,0 +1,123 @@
+{
+  "$comment": "The ten composite scenarios from 01-PRD.md § 8. The flag sets here are canonical and must match that table exactly -- the admin API applies them verbatim and does not interpret them.",
+  "scenarios": [
+    {
+      "id": "S1",
+      "name": "Third-party degradation",
+      "story": "Search gets slow, but only sometimes. The trace shows the time is not ours. One provider is the whole tail.",
+      "products": ["APM", "Trace Watchdog", "Service Map"],
+      "flags": {
+        "gds_latency_ms": 1500,
+        "gds_latency_mode": "p99_tail",
+        "gds_error_rate": 0.05,
+        "gds_provider_down": "TRVP"
+      }
+    },
+    {
+      "id": "S2",
+      "name": "Payment provider brownout",
+      "story": "Bookings stall at PENDING_PAYMENT. Error Tracking groups declines cleanly, the composite monitor fires, and the revenue widget dives.",
+      "products": ["Error Tracking", "Monitors", "Dashboards"],
+      "flags": {
+        "payment_latency_ms": 3000,
+        "payment_error_rate": 0.3,
+        "payment_decline_rate": 0.25,
+        "payment_decline_mix": "insufficient_funds",
+        "payment_webhook_delay_ms": 15000
+      }
+    },
+    {
+      "id": "S3",
+      "name": "The missing index",
+      "story": "The account page times out. Database Monitoring shows the plan flip from Index Scan to Seq Scan, and the fix is one toggle away.",
+      "products": ["Database Monitoring", "APM"],
+      "flags": {
+        "db_drop_index": true,
+        "db_n_plus_one": true
+      }
+    },
+    {
+      "id": "S4",
+      "name": "Cache stampede to cascade",
+      "story": "A cold cache drives the GDS fan-out twenty-fold, the provider rate-limits, search errors, holds expire, and bookings fail. The full incident narrative.",
+      "products": ["APM", "Incident Management", "Monitors"],
+      "loadMultiplier": 2,
+      "flags": {
+        "redis_disabled": true,
+        "cache_ttl_seconds": 1,
+        "gds_rate_limit_aggressive": true,
+        "gds_latency_ms": 800,
+        "gds_error_rate": 0.1
+      }
+    },
+    {
+      "id": "S5",
+      "name": "Slow consumer",
+      "story": "Bookings confirm but confirmation emails never arrive. Data Streams Monitoring shows exactly which hop is the problem, and the DLQ fills.",
+      "products": ["Data Streams Monitoring", "APM"],
+      "flags": {
+        "kafka_consumer_pause": "voyager-notifications-v1",
+        "kafka_slow_consumer_ms": 2000,
+        "kafka_poison_rate": 0.05,
+        "email_failure_rate": 0.1
+      }
+    },
+    {
+      "id": "S6",
+      "name": "The hot deploy",
+      "story": "p95 regresses right at a deployment marker. The profiler flame graph finds the loop, and Code Hotspots links to the line.",
+      "products": ["Continuous Profiler", "Deployment Tracking", "APM"],
+      "flags": {
+        "version_override": "v2-bad",
+        "pricing_hot_path": true
+      }
+    },
+    {
+      "id": "S7",
+      "name": "Memory leak",
+      "story": "RSS climbs over twenty minutes, GC pressure rises, then the process OOMs and restarts.",
+      "products": ["Continuous Profiler", "Live Processes", "Infrastructure"],
+      "requiresRestartToRecover": true,
+      "flags": {
+        "booking_memory_leak": true
+      }
+    },
+    {
+      "id": "S8",
+      "name": "Frontend-only regression",
+      "story": "The backend is perfectly healthy and users complain anyway. Core Web Vitals and Session Replay make the invisible visible.",
+      "products": ["RUM", "Session Replay", "Error Tracking"],
+      "flags": {
+        "frontend_heavy_assets": true,
+        "frontend_blocking_js": true,
+        "frontend_layout_shift": true,
+        "frontend_js_error_rate": 0.03
+      }
+    },
+    {
+      "id": "S9",
+      "name": "AI support goes off the rails",
+      "story": "Support chat stops calling the booking tool and starts making things up. LLM Observability shows the tool-call failure and the token blowup.",
+      "products": ["LLM Observability", "APM"],
+      "flags": {
+        "llm_degrade_tools": true,
+        "llm_latency_ms": 4000,
+        "llm_hallucinate": true,
+        "llm_token_bloat": true,
+        "llm_error_rate": 0.05
+      }
+    },
+    {
+      "id": "S10",
+      "name": "Lock contention",
+      "story": "Seat holds serialise. The wait profile and DBM blocking sessions converge on the same advisory lock.",
+      "products": ["Database Monitoring", "Continuous Profiler", "APM"],
+      "loadMultiplier": 2,
+      "flags": {
+        "hold_lock_contention": true,
+        "db_lock_storm": true,
+        "db_pool_starvation": true
+      }
+    }
+  ]
+}

@@ -392,6 +392,46 @@ services:
       start_period: 20s
     mem_limit: 512m
 
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+    container_name: api-gateway
+    hostname: api-gateway
+    restart: unless-stopped
+    networks: [voyager]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *data-env
+      DD_SERVICE: voyager-gateway
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+      JWT_SECRET: ${JWT_SECRET}
+      ADMIN_SECRET: ${ADMIN_SECRET}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost}
+      SEARCH_BASE_URL: http://search-service:4010
+      PRICING_BASE_URL: http://pricing-service:4020
+      BOOKING_BASE_URL: http://booking-service:4030
+      PAYMENT_BASE_URL: http://payment-service:4040
+      LOYALTY_BASE_URL: http://loyalty-service:4050
+      NOTIFICATIONS_BASE_URL: http://notification-worker:4060
+      AI_SUPPORT_BASE_URL: http://ai-support-service:4070
+      SCENARIOS_DIR: /app/scenarios
+    volumes:
+      # The catalogue is data, so it is mounted rather than baked in: editing
+      # a flag's metadata during a demo is a restart, not a rebuild.
+      - ./tools/scenarios:/app/scenarios:ro
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    mem_limit: 512m
+
   # ----------------------------------------------------------------- jobs --
   # Profiled out of `make up`; run explicitly by `make seed`.
 

@@ -313,6 +313,34 @@ async def provider_webhook(payload: dict[str, Any]) -> dict:
 # ------------------------------------------------------------------- reads --
 
 
+@router.get("/by-booking/{booking_id}")
+async def get_payment_for_booking(booking_id: str) -> dict:
+    """The latest payment attempt against a booking, for the BFF.
+
+    A booking with no payment yet is not an error -- that is every booking
+    between HELD and the moment the traveller enters a card -- so this answers
+    with a null payment rather than a 404.
+    """
+    async with db.session() as session:
+        payment = await payment_repo.latest_for_booking(session, booking_id)
+        if payment is None:
+            return {"bookingId": booking_id, "payment": None}
+        events = await payment_repo.events_for(session, payment["id"])
+    return {"bookingId": booking_id, "payment": {**_public(payment), "events": events}}
+
+
+@router.get("/methods/{user_id}")
+async def get_saved_methods(user_id: str) -> dict:
+    """Cards this traveller has paid with before, by last four and brand.
+
+    There is no card vault behind this. It reads the payments ledger, which
+    only ever held the last four digits.
+    """
+    async with db.session() as session:
+        methods = await payment_repo.methods_for_user(session, user_id)
+    return {"userId": user_id, "methods": methods}
+
+
 @router.get("/{payment_id}")
 async def get_payment(payment_id: str) -> dict:
     async with db.session() as session:

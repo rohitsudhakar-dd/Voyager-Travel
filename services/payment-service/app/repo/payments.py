@@ -119,6 +119,75 @@ async def get_by_idempotency_key(db: AsyncSession, key: str) -> dict | None:
     return _row(row) if row else None
 
 
+async def latest_for_booking(db: AsyncSession, booking_id: str) -> dict | None:
+    """The most recent payment attempt against a booking.
+
+    Newest first rather than the first authorized one: a traveller who was
+    declined and retried has two rows, and the one that matters to the
+    confirmation page is the one they just made.
+    """
+    try:
+        key = UUID(booking_id)
+    except ValueError:
+        return None
+
+    row = (
+        await db.execute(
+            text(
+                f"""
+                SELECT {_COLUMNS} FROM payments
+                WHERE booking_id = :booking_id
+                ORDER BY created_at DESC LIMIT 1
+                """
+            ),
+            {"booking_id": key},
+        )
+    ).one_or_none()
+    return _row(row) if row else None
+
+
+async def methods_for_user(db: AsyncSession, user_id: str) -> list[dict]:
+    """The cards a traveller has successfully paid with before.
+
+    Voyager stores no card vault, so "saved methods" is derived from the
+    payments ledger: the last four digits and the brand, which is all that was
+    ever kept. Nothing here can be used to charge anyone -- it exists so the
+    checkout form can offer "the card ending 4242" instead of a blank field.
+    """
+    try:
+        key = UUID(user_id)
+    except ValueError:
+        return []
+
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT p.card_last4, p.card_brand, max(p.created_at) AS last_used_at,
+                       count(*) AS times_used
+                FROM payments p
+                JOIN bookings b ON b.id = p.booking_id
+                WHERE b.user_id = :user_id
+                  AND p.state IN ('AUTHORIZED', 'CAPTURED', 'REFUNDED')
+                GROUP BY p.card_last4, p.card_brand
+                ORDER BY max(p.created_at) DESC
+                LIMIT 5
+                """
+            ),
+            {"user_id": key},
+        )
+    ).all()
+    return [
+        {
+            "last4": row.card_last4,
+            "brand": row.card_brand,
+            "timesUsed": row.times_used,
+            "lastUsedAt": row.last_used_at.astimezone(timezone.utc).isoformat(),
+        }
+        for row in rows
+    ]
+
+
 async def get_by_provider_reference(db: AsyncSession, reference: str) -> dict | None:
     row = (
         await db.execute(
