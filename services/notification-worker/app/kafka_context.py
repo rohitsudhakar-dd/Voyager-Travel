@@ -30,15 +30,23 @@ from ddtrace.propagation.http import HTTPPropagator
 def produce_headers(topic: str) -> list[tuple[str, bytes]]:
     """Headers for a message about to be published to `topic`.
 
-    The checkpoint is set even when no span is active. A message published from
-    a background task still belongs to the pipeline, and a pathway with a hole
-    in it is reported as a broken topology rather than a partial one.
+    The checkpoint is set even when there is no trace context at all. A message
+    published from a background task still belongs to the pipeline, and a
+    pathway with a hole in it is reported as a broken topology rather than a
+    partial one.
     """
     carrier: dict[str, str] = {}
 
-    span = tracer.current_span()
-    if span is not None:
-        HTTPPropagator.inject(span.context, carrier)
+    # current_trace_context rather than current_span().context: a consumer that
+    # republishes -- the DLQ path, and booking's payments consumer emitting
+    # notification events -- has activated a context without starting a span on
+    # top of it, and in that state current_span() is None. Reading the span
+    # dropped the trace on exactly the hops that join two topics together,
+    # while the pathway header still went out, so the pipeline looked connected
+    # and the traces did not.
+    context = tracer.current_trace_context()
+    if context is not None:
+        HTTPPropagator.inject(context, carrier)
 
     set_produce_checkpoint("kafka", topic, carrier.__setitem__)
 

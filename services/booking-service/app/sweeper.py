@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 
 import structlog
+from ddtrace import tracer
 
 from app import db
 from app.domain.states import Trigger
@@ -26,7 +27,13 @@ log = structlog.get_logger()
 async def run(stop: asyncio.Event) -> None:
     while not stop.is_set():
         try:
-            swept = await sweep_once()
+            # Each sweep gets its own trace. Nothing calls the sweeper, so
+            # without this the `booking.expired` events it publishes carry no
+            # trace context at all, and "why did this booking expire?" has no
+            # trace to open -- the one question a stranded hold actually raises.
+            with tracer.trace("booking.sweep_expired_holds") as span:
+                swept = await sweep_once()
+                span.set_tag("booking.expired_count", swept)
             if swept:
                 log.info("Holds swept", expired_count=swept)
         except Exception as exc:  # noqa: BLE001 - a bad sweep must not end the loop

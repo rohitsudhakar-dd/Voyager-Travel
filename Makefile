@@ -7,23 +7,51 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-COMPOSE      := docker compose
-COMPOSE_DEV  := $(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml
 DATA_LAYER   := postgres redis kafka
+
+# The dev overlay is selected by the same value that arms it. docker-compose.dev.yml
+# refuses to interpolate an empty VOYAGER_DEV_BIND_ADDR, so a workstation --
+# where `make bootstrap` set it -- always gets both files, and a deployed host,
+# where .env.example's empty value stands, can never get the second one even by
+# running a target that would have asked for it.
+DEV_BIND_ADDR := $(shell sed -n 's/^VOYAGER_DEV_BIND_ADDR=\([^[:space:]\#]*\).*/\1/p' .env 2>/dev/null | head -1)
+COMPOSE_FILES := -f docker-compose.yml
+ifneq ($(strip $(DEV_BIND_ADDR)),)
+COMPOSE_FILES += -f docker-compose.dev.yml
+endif
+
+COMPOSE      := docker compose $(COMPOSE_FILES)
+COMPOSE_ALL  := $(COMPOSE) -f docker-compose.loadgen.yml
+
+# Exported so that the scripts which have to recreate containers -- currently
+# only sampling-mode.sh -- act on the same file set as everything else rather
+# than quietly dropping the overlay's published ports on a workstation.
+export VOYAGER_COMPOSE := docker compose $(COMPOSE_FILES)
 
 # Source Code Integration. Resolved from the working tree and exported so that
 # both `build` (which bakes them into the image) and `up` see the same values.
 # A dirty tree still reports the last commit, which is the honest answer: the
 # link points at code that exists on the remote rather than at nothing.
-export DD_GIT_COMMIT_SHA    ?= $(shell git rev-parse HEAD 2>/dev/null)
-export DD_GIT_REPOSITORY_URL ?= $(shell git config --get remote.origin.url 2>/dev/null)
+#
+# Each is exported only when git can actually answer. Exported empty, it would
+# shadow the value in .env -- which is the only source a checkout with no
+# remote has -- and turn Source Code Integration off with no error anywhere.
+VOYAGER_SHA  := $(shell git rev-parse HEAD 2>/dev/null)
+VOYAGER_REPO := $(shell git config --get remote.origin.url 2>/dev/null)
+ifneq ($(strip $(VOYAGER_SHA)),)
+export DD_GIT_COMMIT_SHA ?= $(VOYAGER_SHA)
+endif
+ifneq ($(strip $(VOYAGER_REPO)),)
+export DD_GIT_REPOSITORY_URL ?= $(VOYAGER_REPO)
+endif
 
 # `s=` selects a single service for the targets that take one.
 s ?=
 
 .PHONY: help bootstrap build up up-full up-one web-ui down nuke seed seed-verify reset \
         logs migrate healthcheck chaos chaos-reset scenario scenarios \
-        dd-apply dd-sourcemaps demo-mode idle-mode test verify verify-tracing deploy ps
+        dd-apply dd-sourcemaps demo-mode idle-mode test verify verify-tracing verify-streams deploy ps \
+        test-web test-node test-python test-go verify-edge
 
 help: ## List available targets
 	@echo "Voyager -- make targets"
@@ -41,8 +69,11 @@ bootstrap: ## Check host tooling and create .env from the template
 	@if [ -f .env ]; then \
 		echo ".env already exists -- leaving it alone"; \
 	else \
-		cp .env.example .env; \
+		sed 's|^VOYAGER_DEV_BIND_ADDR=.*|VOYAGER_DEV_BIND_ADDR=127.0.0.1|' \
+			.env.example > .env; \
 		echo "created .env from .env.example"; \
+		echo "set VOYAGER_DEV_BIND_ADDR=127.0.0.1 -- this is a workstation, so"; \
+		echo "docker-compose.dev.yml may publish internal ports on loopback"; \
 	fi
 	@echo
 	@echo "Next:"
@@ -64,20 +95,25 @@ web-ui: ## Run the frontend dev server with the browser fixture layer (no backen
 		node:20.17-alpine sh -c "npm install && npm run dev -- --host 0.0.0.0"
 
 up-full: ## up + the k6 and Playwright load generators
-	@echo "not yet implemented (phase 11)"
+	$(COMPOSE_ALL) --profile loadgen up -d
+	@$(MAKE) --no-print-directory ps
 
 up-one: ## Rebuild and restart one service: make up-one s=pricing
 	@test -n "$(s)" || { echo "usage: make up-one s=<service>"; exit 1; }
 	$(COMPOSE) up -d --build $(s)
 
+# down, nuke and ps name the loadgen overlay as well. Without it the
+# generators are orphans of the project: `down` reports them as such and
+# `ps` omits them, so "is the load generator running" -- the first question
+# an empty dashboard raises -- cannot be answered with the operator interface.
 down: ## Stop everything, keep volumes
-	$(COMPOSE) down --remove-orphans
+	$(COMPOSE_ALL) --profile loadgen down --remove-orphans
 
 nuke: ## Stop everything and delete volumes (destructive)
-	$(COMPOSE) down --remove-orphans --volumes
+	$(COMPOSE_ALL) --profile loadgen down --remove-orphans --volumes
 
 ps: ## Show container status
-	@$(COMPOSE) ps
+	@$(COMPOSE_ALL) --profile loadgen ps
 
 logs: ## Tail one service: make logs s=booking
 	@test -n "$(s)" || { echo "usage: make logs s=<service>"; exit 1; }
@@ -119,44 +155,43 @@ scenarios: ## List the composite scenarios and which one is active
 # ------------------------------------------------------------- datadog --
 
 dd-apply: ## Push dashboards, monitors, SLOs and synthetics
-	@echo "not yet implemented (phase 12)"
+	@./datadog/apply.sh
 
 dd-sourcemaps: ## Upload web-ui sourcemaps
-	@echo "not yet implemented (phase 9)"
+	@./scripts/dd-sourcemaps.sh
 
 demo-mode: ## 100% sampling, 2x load
-	@echo "not yet implemented (phase 13)"
+	@./scripts/sampling-mode.sh demo
 
 idle-mode: ## Reduced sampling, 1x load, 20% replay -- controls cost
-	@echo "not yet implemented (phase 13)"
+	@./scripts/sampling-mode.sh idle
 
 # -------------------------------------------------------------- verify --
 
 healthcheck: ## Assert every service is healthy and all chaos flags are off
-	@echo "not yet implemented (phase 13)"
+	@./scripts/healthcheck.sh
 
 test: ## Run all four test suites
-	@# The host has no Go toolchain, so the suites run in a throwaway
-	@# container against the working tree.
-	@for svc in search-service pricing-service; do \
-		echo "== $$svc =="; \
-		docker run --rm -v "$(PWD)/services/$$svc":/src -w /src golang:1.23-alpine \
-			sh -c 'go vet ./... && go test ./...' || exit 1; \
-	done
-	@for svc in booking-service payment-service; do \
-		echo "== $$svc =="; \
-		docker run --rm -v "$(PWD)/services/$$svc":/app -w /app python:3.12-slim \
-			sh -c 'pip install -q -r requirements.txt -r requirements-dev.txt && python -m pytest' \
-			|| exit 1; \
-	done
-	@echo "== typescript =="
-	@echo "not yet implemented (phases 5, 7)"
+	@./scripts/run-tests.sh all
+
+test-web: ## One suite: vitest in apps/web-ui
+	@./scripts/run-tests.sh web
+
+test-node: ## One suite: vitest and typecheck in the Node services
+	@./scripts/run-tests.sh node
+
+test-python: ## One suite: pytest in the four Python services
+	@./scripts/run-tests.sh python
+
+test-go: ## One suite: go vet and go test in the two Go services
+	@./scripts/run-tests.sh go
 
 verify: ## Run the phase exit-criteria scripts against a running stack
 	@./scripts/verify-mocks.sh
 	@./scripts/verify-search.sh
 	@./scripts/verify-booking.sh
 	@./scripts/verify-gateway.sh
+	@./scripts/verify-edge.sh
 	@echo
 	@echo "Span-level tracing checks are not run here: they stop and restart six"
 	@echo "services. Run them on their own with 'make verify-tracing'."
@@ -164,5 +199,11 @@ verify: ## Run the phase exit-criteria scripts against a running stack
 verify-tracing: ## Phase 8 exit criteria (stops and restarts services; takes minutes)
 	@./scripts/verify-tracing.sh
 
+verify-streams: ## Phase 10 Data Streams and Kafka chaos (pauses a consumer group; takes minutes)
+	@./scripts/verify-streams.sh
+
+verify-edge: ## Phase 13 exit criteria for the edge proxy and port exposure
+	@./scripts/verify-edge.sh
+
 deploy: ## Pull, stamp DD_VERSION, build, rolling restart, migrate, healthcheck
-	@echo "not yet implemented (phase 13)"
+	@./infra/ec2/deploy.sh
