@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	httptrace "gopkg.in/DataDog/dd-trace-go.v1/contrib/net/http"
 	"sync"
 	"time"
 
@@ -23,15 +25,23 @@ type Client struct {
 }
 
 func NewClient(baseURL string) *Client {
+	// Wrapped, so each provider call carries trace context. Without it the
+	// four mock-gds spans have no parent and the fan-out -- the single most
+	// interesting shape in this application's traces -- does not render.
 	return &Client{
 		baseURL: baseURL,
-		http: &http.Client{
+		http: httptrace.WrapClient(&http.Client{
 			Timeout: ProviderTimeout,
 			Transport: &http.Transport{
 				MaxIdleConnsPerHost: 8,
 				IdleConnTimeout:     90 * time.Second,
 			},
-		},
+		}, httptrace.RTWithResourceNamer(func(req *http.Request) string {
+			// The provider code is a path segment, so the default namer would
+			// produce one resource per provider per route and bury the
+			// endpoint. The method and path are what a latency graph needs.
+			return req.Method + " " + req.URL.Path
+		})),
 	}
 }
 

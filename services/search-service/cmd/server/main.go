@@ -18,11 +18,17 @@ import (
 	"voyager/search-service/internal/config"
 	"voyager/search-service/internal/handlers"
 	"voyager/search-service/internal/logging"
+	"voyager/search-service/internal/tracing"
 )
 
 func main() {
 	cfg := config.Load()
 	log := logging.New(cfg.Service, cfg.Env, cfg.Version)
+
+	// First, and before any client is constructed: the contribs patch nothing
+	// retroactively, so anything built above this line is invisible.
+	stopTracing := tracing.Start(cfg.Service, cfg.Env, cfg.Version)
+	defer stopTracing()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -31,7 +37,7 @@ func main() {
 	if err != nil {
 		log.Fatal().Str("error_message", err.Error()).Msg("Service failed to start")
 	}
-	rdb := redis.NewClient(redisOptions)
+	rdb := tracing.WrapRedis(redis.NewClient(redisOptions), cfg.Service)
 	defer rdb.Close()
 
 	server := &http.Server{

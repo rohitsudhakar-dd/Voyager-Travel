@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	chitrace "gopkg.in/DataDog/dd-trace-go.v1/contrib/go-chi/chi.v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
@@ -43,6 +44,9 @@ func NewServer(
 	s := &Server{cfg: cfg, log: log, store: store, chaos: flags, pool: pool, redis: rdb}
 
 	router := chi.NewRouter()
+	// Before WithRequestID, so the request id the access log prints is the
+	// one that lands on the span rather than the other way round.
+	router.Use(chitrace.Middleware(chitrace.WithServiceName(cfg.Service)))
 	router.Use(httpx.WithRequestID)
 	router.Use(httpx.AccessLog(log, flags.ActiveFlags))
 

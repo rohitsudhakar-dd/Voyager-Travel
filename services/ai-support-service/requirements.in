@@ -18,3 +18,13 @@ redis~=5.0.0
 httpx~=0.27.0
 structlog~=24.4.0
 openai~=1.50.0
+
+# Datadog APM. Pinned exactly rather than with ~=, unlike everything else
+# here: ddtrace patches libraries by version, so a bump that looks like a
+# patch release can silently stop instrumenting a library it used to handle,
+# and the only symptom is spans that stop appearing.
+ddtrace==2.14.0
+
+# The DogStatsD client, for the business metrics in Phase 10. It ships
+# separately from ddtrace and is not pulled in as a dependency.
+datadog~=0.50.0

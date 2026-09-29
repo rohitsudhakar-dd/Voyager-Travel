@@ -11,6 +11,13 @@ COMPOSE      := docker compose
 COMPOSE_DEV  := $(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml
 DATA_LAYER   := postgres redis kafka
 
+# Source Code Integration. Resolved from the working tree and exported so that
+# both `build` (which bakes them into the image) and `up` see the same values.
+# A dirty tree still reports the last commit, which is the honest answer: the
+# link points at code that exists on the remote rather than at nothing.
+export DD_GIT_COMMIT_SHA    ?= $(shell git rev-parse HEAD 2>/dev/null)
+export DD_GIT_REPOSITORY_URL ?= $(shell git config --get remote.origin.url 2>/dev/null)
+
 # `s=` selects a single service for the targets that take one.
 s ?=
 

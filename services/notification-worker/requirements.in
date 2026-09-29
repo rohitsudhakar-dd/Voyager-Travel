@@ -1,8 +1,6 @@
 # Direct dependencies for notification-worker. Versions track 02-TECH-STACK.md § 4.3.
 # requirements.txt is generated from this file with pip-compile -- never edit it
 # by hand (02-TECH-STACK.md § 12, rule 2).
-#
-# Datadog packages (ddtrace, datadog) are deliberately absent until Phase 8.
 # No sqlalchemy or asyncpg: this service owns no tables and reads none.
 
 fastapi~=0.115.0
@@ -13,3 +11,13 @@ redis~=5.0.0
 aiokafka~=0.11.0
 httpx~=0.27.0
 structlog~=24.4.0
+
+# Datadog APM. Pinned exactly rather than with ~=, unlike everything else
+# here: ddtrace patches libraries by version, so a bump that looks like a
+# patch release can silently stop instrumenting a library it used to handle,
+# and the only symptom is spans that stop appearing.
+ddtrace==2.14.0
+
+# The DogStatsD client, for the business metrics in Phase 10. It ships
+# separately from ddtrace and is not pulled in as a dependency.
+datadog~=0.50.0

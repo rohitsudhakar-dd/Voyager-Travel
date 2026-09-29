@@ -1,0 +1,53 @@
+# Datadog Agent configuration (02-TECH-STACK.md § 6).
+#
+# Most settings arrive as DD_* environment variables from the Compose block,
+# which is the form every customer's deployment tooling produces. This file
+# carries only the handful that have no clean environment equivalent, or that
+# are long enough that reading them in YAML is genuinely easier.
+#
+# Integration configuration deliberately lives nowhere near here: the checks
+# for Postgres, Redis and Kafka are Docker labels on those containers, so a
+# service and its monitoring travel together (§ 6.1).
+
+# Logs from every container are collected. The per-container opt-out is a
+# Docker label, which is how the load generators exclude themselves without
+# this file needing to know they exist.
+logs_config:
+  container_collect_all: true
+  # Docker's JSON file driver is the source. The alternative, reading the
+  # socket, loses lines whenever the Agent restarts.
+  docker_container_use_file: true
+  # Without this, a container that writes a 20-line stack trace produces 20
+  # unrelated log entries and Error Tracking cannot group any of them.
+  auto_multi_line_detection: true
+
+apm_config:
+  enabled: true
+  # Traces arrive over the bridge network from other containers, not over
+  # loopback. Without this the receiver refuses them and the only symptom is
+  # an empty Service Map.
+  apm_non_local_traffic: true
+  receiver_port: 8126
+  # Health probes fire every ten seconds against every service. Left in, they
+  # would be most of the trace volume and none of the signal.
+  filter_tags:
+    reject:
+      - "http.route:/health"
+      - "http.route:/ready"
+
+dogstatsd_non_local_traffic: true
+dogstatsd_port: 8125
+
+process_config:
+  process_collection:
+    enabled: true
+
+database_monitoring:
+  autodiscovery:
+    enabled: true
+
+# Container names, not image names: the Agent should not report on itself,
+# and the seeder is a job that exits rather than a service worth watching.
+container_exclude:
+  - "name:datadog-agent"
+  - "name:seeder"

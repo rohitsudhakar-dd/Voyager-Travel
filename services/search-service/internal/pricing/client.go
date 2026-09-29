@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	httptrace "gopkg.in/DataDog/dd-trace-go.v1/contrib/net/http"
 	"time"
 )
 
@@ -22,7 +24,9 @@ type Client struct {
 func NewClient(baseURL string) *Client {
 	return &Client{
 		baseURL: baseURL,
-		http:    &http.Client{Timeout: 5 * time.Second},
+		// Wrapped so the pricing call is a child of the search span rather
+		// than a separate trace that has to be correlated by hand.
+		http:    httptrace.WrapClient(&http.Client{Timeout: 5 * time.Second}),
 	}
 }
 

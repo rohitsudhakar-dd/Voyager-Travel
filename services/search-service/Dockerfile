@@ -19,4 +19,13 @@ COPY --from=build /out/search-service /usr/local/bin/search-service
 
 USER voyager
 EXPOSE 4010
+
+# Source Code Integration. Baked at build time because the running container
+# has no git: without these two, an Error Tracking stack frame is text rather
+# than a link to the line on the default branch.
+ARG DD_GIT_REPOSITORY_URL=""
+ARG DD_GIT_COMMIT_SHA=""
+ENV DD_GIT_REPOSITORY_URL=$DD_GIT_REPOSITORY_URL \
+    DD_GIT_COMMIT_SHA=$DD_GIT_COMMIT_SHA
+
 ENTRYPOINT ["/usr/local/bin/search-service"]

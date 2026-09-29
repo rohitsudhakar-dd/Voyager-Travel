@@ -20,16 +20,26 @@ import (
 	"voyager/pricing-service/internal/config"
 	"voyager/pricing-service/internal/logging"
 	"voyager/pricing-service/internal/rules"
+	"voyager/pricing-service/internal/tracing"
 )
 
 func main() {
 	cfg := config.Load()
 	log := logging.New(cfg.Service, cfg.Env, cfg.Version)
 
+	// First, and before any client is constructed: the contribs patch nothing
+	// retroactively, so anything built above this line is invisible.
+	stopTracing := tracing.Start(cfg.Service, cfg.Env, cfg.Version)
+	defer stopTracing()
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		log.Fatal().Str("error_message", err.Error()).Msg("Service failed to start")
+	}
+	pool, err := tracing.NewPool(ctx, poolConfig, cfg.Service)
 	if err != nil {
 		log.Fatal().Str("error_message", err.Error()).Msg("Service failed to start")
 	}
@@ -39,7 +49,7 @@ func main() {
 	if err != nil {
 		log.Fatal().Str("error_message", err.Error()).Msg("Service failed to start")
 	}
-	rdb := redis.NewClient(redisOptions)
+	rdb := tracing.WrapRedis(redis.NewClient(redisOptions), cfg.Service)
 	defer rdb.Close()
 
 	store := rules.NewStore(pool, log)

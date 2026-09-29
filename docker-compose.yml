@@ -32,6 +32,45 @@ x-data-env: &data-env
   REDIS_URL: ${REDIS_URL:-redis://redis:6379}
   KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
 
+# The two Source Code Integration values, passed into every image build.
+# They are build args rather than runtime env because the tracer reads them at
+# process start and the container has no git to ask. `make up` exports
+# DD_GIT_COMMIT_SHA from the working tree; unset, SCI is simply off.
+x-sci-args: &sci-args
+  DD_GIT_REPOSITORY_URL: ${DD_GIT_REPOSITORY_URL:-}
+  DD_GIT_COMMIT_SHA: ${DD_GIT_COMMIT_SHA:-}
+
+# Merged into every first-party service. `DD_SERVICE` is deliberately absent:
+# each service sets its own, and a default here would quietly give a service
+# that forgot one the wrong name rather than an obvious blank.
+#
+# DD_AGENT_HOST is the container name because the Agent shares the bridge
+# network. Point a tracer at localhost and it reports nothing at all, with no
+# error -- which is the single most common way this setup silently fails.
+x-datadog-env: &datadog-env
+  DD_AGENT_HOST: datadog-agent
+  DD_TRACE_AGENT_PORT: "8126"
+  DD_DOGSTATSD_HOST: datadog-agent
+  DD_DOGSTATSD_PORT: "8125"
+  DD_ENV: ${DD_ENV:-demo}
+  DD_VERSION: ${DD_VERSION:-dev}
+  # Both styles, on every service. `datadog` keeps the Agent's own correlation
+  # working; `tracecontext` is the W3C header the browser's RUM SDK sends, and
+  # without it the RUM-to-APM link breaks at the gateway.
+  DD_TRACE_PROPAGATION_STYLE: datadog,tracecontext
+  DD_TRACE_ENABLED: "true"
+  DD_TRACE_SAMPLE_RATE: ${DD_TRACE_SAMPLE_RATE:-1.0}
+  DD_TRACE_SAMPLING_RULES: ${DD_TRACE_SAMPLING_RULES:-}
+  DD_LOGS_INJECTION: ${DD_LOGS_INJECTION:-true}
+  DD_PROFILING_ENABLED: ${DD_PROFILING_ENABLED:-true}
+  DD_DATA_STREAMS_ENABLED: ${DD_DATA_STREAMS_ENABLED:-true}
+  DD_RUNTIME_METRICS_ENABLED: "true"
+  # Source Code Integration: these two turn a stack frame in Error Tracking
+  # into a link to the exact line on the default branch.
+  DD_GIT_REPOSITORY_URL: ${DD_GIT_REPOSITORY_URL:-}
+  DD_GIT_COMMIT_SHA: ${DD_GIT_COMMIT_SHA:-}
+  DD_TAGS: project:voyager,team:demo,owner:${OWNER:-voyager}
+
 x-data-layer-ready: &data-layer-ready
   postgres:
     condition: service_healthy
@@ -61,6 +100,18 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./infra/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
       - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    # Autodiscovery via labels rather than a static Agent config file, so a
+    # service and the check that watches it live in one place (§ 6.1).
+    # Phase 10 turns `dbm` on; until pg_stat_statements is loaded and the
+    # datadog role exists it would only produce errors in the Agent log.
+    labels:
+      com.datadoghq.ad.checks: |
+        {"postgres":{"init_config":{},"instances":[{
+          "host":"%%host%%","port":5432,
+          "username":"datadog","password":"${DD_PG_PASSWORD:-}","dbname":"${POSTGRES_DB:-voyager}",
+          "dbm":false,
+          "relations":[{"relation_regex":".*"}]
+        }]}}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -80,6 +131,9 @@ services:
     volumes:
       - redisdata:/data
       - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    labels:
+      com.datadoghq.ad.checks: |
+        {"redisdb":{"init_config":{},"instances":[{"host":"%%host%%","port":"6379"}]}}
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -131,6 +185,20 @@ services:
         -Djava.rmi.server.hostname=kafka
     volumes:
       - kafkadata:/var/lib/kafka
+    labels:
+      # Two checks, because they answer different questions: `kafka` scrapes
+      # broker health over JMX, `kafka_consumer` reports per-group lag. Data
+      # Streams Monitoring also reports lag, from the client side -- run all
+      # three, since a broker that is fine while a consumer is stalled looks
+      # identical to a healthy system from any one of them alone.
+      com.datadoghq.ad.checks: |
+        {
+          "kafka":{"init_config":{},"instances":[{"host":"%%host%%","port":9999}]},
+          "kafka_consumer":{"init_config":{},"instances":[{
+            "kafka_connect_str":"%%host%%:9092",
+            "monitor_unlisted_consumer_groups":true
+          }]}
+        }
     healthcheck:
       # KAFKA_JMX_OPTS is inherited by every CLI tool launched in this
       # container, and each one then tries to bind 9999 -- which the broker
@@ -150,6 +218,8 @@ services:
   mock-gds:
     build:
       context: ./mocks/mock-gds
+      args:
+        <<: *sci-args
     container_name: mock-gds
     hostname: mock-gds
     restart: unless-stopped
@@ -160,6 +230,7 @@ services:
       redis:
         condition: service_healthy
     environment:
+      <<: *datadog-env
       DD_SERVICE: mock-gds
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
@@ -181,6 +252,8 @@ services:
   mock-payments:
     build:
       context: ./mocks/mock-payments
+      args:
+        <<: *sci-args
     container_name: mock-payments
     hostname: mock-payments
     restart: unless-stopped
@@ -189,6 +262,7 @@ services:
       redis:
         condition: service_healthy
     environment:
+      <<: *datadog-env
       DD_SERVICE: mock-payments
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
@@ -205,6 +279,8 @@ services:
   mock-email:
     build:
       context: ./mocks/mock-email
+      args:
+        <<: *sci-args
     container_name: mock-email
     hostname: mock-email
     restart: unless-stopped
@@ -213,6 +289,7 @@ services:
       redis:
         condition: service_healthy
     environment:
+      <<: *datadog-env
       DD_SERVICE: mock-email
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
@@ -228,6 +305,8 @@ services:
   mock-llm:
     build:
       context: ./mocks/mock-llm
+      args:
+        <<: *sci-args
     container_name: mock-llm
     hostname: mock-llm
     restart: unless-stopped
@@ -236,6 +315,7 @@ services:
       redis:
         condition: service_healthy
     environment:
+      <<: *datadog-env
       DD_SERVICE: mock-llm
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
@@ -254,6 +334,8 @@ services:
   pricing-service:
     build:
       context: ./services/pricing-service
+      args:
+        <<: *sci-args
     container_name: pricing-service
     hostname: pricing-service
     restart: unless-stopped
@@ -264,7 +346,7 @@ services:
       redis:
         condition: service_healthy
     environment:
-      <<: *data-env
+      <<: [*data-env, *datadog-env]
       DD_SERVICE: voyager-pricing
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
@@ -279,6 +361,8 @@ services:
   search-service:
     build:
       context: ./services/search-service
+      args:
+        <<: *sci-args
     container_name: search-service
     hostname: search-service
     restart: unless-stopped
@@ -291,6 +375,7 @@ services:
       mock-gds:
         condition: service_healthy
     environment:
+      <<: *datadog-env
       DD_SERVICE: voyager-search
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
@@ -326,6 +411,8 @@ services:
   booking-service:
     build:
       context: ./services/booking-service
+      args:
+        <<: *sci-args
     container_name: booking-service
     hostname: booking-service
     restart: unless-stopped
@@ -344,8 +431,15 @@ services:
       pricing-service:
         condition: service_healthy
     environment:
-      <<: *data-env
+      <<: [*data-env, *datadog-env]
       DD_SERVICE: voyager-booking
+      # ddtrace names integration spans after the library, so every Python
+      # service reports its database as plain `postgres` and its cache as
+      # plain `redis`. On the Service Map that collapses four services onto
+      # two shared nodes and makes "which service is hammering the database"
+      # unanswerable. The Node tracers do the same thing via tracer.use();
+      # Python has no equivalent, so it is done with this mapping.
+      DD_SERVICE_MAPPING: postgres:voyager-booking-postgres,redis:voyager-booking-redis,kafka:voyager-booking-kafka
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
       SEARCH_BASE_URL: http://search-service:4010
@@ -362,6 +456,8 @@ services:
   payment-service:
     build:
       context: ./services/payment-service
+      args:
+        <<: *sci-args
     container_name: payment-service
     hostname: payment-service
     restart: unless-stopped
@@ -378,8 +474,15 @@ services:
       mock-payments:
         condition: service_healthy
     environment:
-      <<: *data-env
+      <<: [*data-env, *datadog-env]
       DD_SERVICE: voyager-payment
+      # ddtrace names integration spans after the library, so every Python
+      # service reports its database as plain `postgres` and its cache as
+      # plain `redis`. On the Service Map that collapses four services onto
+      # two shared nodes and makes "which service is hammering the database"
+      # unanswerable. The Node tracers do the same thing via tracer.use();
+      # Python has no equivalent, so it is done with this mapping.
+      DD_SERVICE_MAPPING: postgres:voyager-payment-postgres,redis:voyager-payment-redis,kafka:voyager-payment-kafka
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
       PAYMENTS_BASE_URL: http://mock-payments:4910
@@ -395,6 +498,8 @@ services:
   loyalty-service:
     build:
       context: ./services/loyalty-service
+      args:
+        <<: *sci-args
     container_name: loyalty-service
     hostname: loyalty-service
     restart: unless-stopped
@@ -409,7 +514,7 @@ services:
       kafka-init:
         condition: service_completed_successfully
     environment:
-      <<: *data-env
+      <<: [*data-env, *datadog-env]
       DD_SERVICE: voyager-loyalty
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
@@ -429,6 +534,8 @@ services:
   notification-worker:
     build:
       context: ./services/notification-worker
+      args:
+        <<: *sci-args
     container_name: notification-worker
     hostname: notification-worker
     restart: unless-stopped
@@ -443,7 +550,15 @@ services:
       mock-email:
         condition: service_healthy
     environment:
+      <<: *datadog-env
       DD_SERVICE: voyager-notifications
+      # ddtrace names integration spans after the library, so every Python
+      # service reports its database as plain `postgres` and its cache as
+      # plain `redis`. On the Service Map that collapses four services onto
+      # two shared nodes and makes "which service is hammering the database"
+      # unanswerable. The Node tracers do the same thing via tracer.use();
+      # Python has no equivalent, so it is done with this mapping.
+      DD_SERVICE_MAPPING: redis:voyager-notifications-redis,kafka:voyager-notifications-kafka
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
@@ -461,6 +576,8 @@ services:
   ai-support-service:
     build:
       context: ./services/ai-support-service
+      args:
+        <<: *sci-args
     container_name: ai-support-service
     hostname: ai-support-service
     restart: unless-stopped
@@ -478,8 +595,15 @@ services:
         condition: service_healthy
     environment:
       # *data-env also carries KAFKA_BROKERS, which this service does not use.
-      <<: *data-env
+      <<: [*data-env, *datadog-env]
       DD_SERVICE: voyager-ai-support
+      # ddtrace names integration spans after the library, so every Python
+      # service reports its database as plain `postgres` and its cache as
+      # plain `redis`. On the Service Map that collapses four services onto
+      # two shared nodes and makes "which service is hammering the database"
+      # unanswerable. The Node tracers do the same thing via tracer.use();
+      # Python has no equivalent, so it is done with this mapping.
+      DD_SERVICE_MAPPING: postgres:voyager-ai-support-postgres,redis:voyager-ai-support-redis
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
@@ -499,6 +623,8 @@ services:
   api-gateway:
     build:
       context: ./services/api-gateway
+      args:
+        <<: *sci-args
     container_name: api-gateway
     hostname: api-gateway
     restart: unless-stopped
@@ -509,7 +635,7 @@ services:
       redis:
         condition: service_healthy
     environment:
-      <<: *data-env
+      <<: [*data-env, *datadog-env]
       DD_SERVICE: voyager-gateway
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
@@ -536,12 +662,70 @@ services:
       start_period: 15s
     mem_limit: 512m
 
+  # -------------------------------------------------------------- datadog --
+
+  datadog-agent:
+    image: gcr.io/datadoghq/agent:7.57.2
+    container_name: datadog-agent
+    hostname: voyager-demo-1
+    restart: unless-stopped
+    networks: [voyager]
+    # No depends_on. The Agent must come up whether or not the application
+    # does -- an Agent that waits for Postgres cannot report that Postgres is
+    # down, which is exactly when you want it.
+    environment:
+      DD_API_KEY: ${DD_API_KEY:?DD_API_KEY is required -- see .env.example}
+      DD_SITE: ${DD_SITE:-datadoghq.com}
+      DD_ENV: ${DD_ENV:-demo}
+      DD_HOSTNAME: voyager-demo-1
+      DD_TAGS: project:voyager team:demo owner:${OWNER:-voyager}
+
+      DD_APM_ENABLED: "true"
+      DD_APM_NON_LOCAL_TRAFFIC: "true"
+      DD_APM_RECEIVER_PORT: "8126"
+
+      DD_USE_DOGSTATSD: "true"
+      DD_DOGSTATSD_NON_LOCAL_TRAFFIC: "true"
+      DD_DOGSTATSD_PORT: "8125"
+
+      DD_LOGS_ENABLED: "true"
+      DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "true"
+      DD_CONTAINER_EXCLUDE: name:datadog-agent
+
+      DD_PROCESS_AGENT_ENABLED: "true"
+      DD_PROCESS_CONFIG_PROCESS_COLLECTION_ENABLED: "true"
+
+      DD_DATABASE_MONITORING_ENABLED: "true"
+
+      # § 6 says to leave this off unless the AMI cooperates. NPM needs eBPF
+      # and a matching kernel; on Colima it fails noisily and buys nothing.
+      DD_SYSTEM_PROBE_NETWORK_ENABLED: "false"
+    volumes:
+      - ./infra/datadog/datadog.yaml:/etc/datadog-agent/datadog.yaml:ro
+      # Autodiscovery reads container labels through the socket. Read-only,
+      # because the Agent has no business starting or stopping anything.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+      # Where the JSON file log driver writes. Without this mount, log
+      # collection silently returns nothing.
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    healthcheck:
+      test: ["CMD-SHELL", "agent health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 45s
+    mem_limit: 768m
+
   # ----------------------------------------------------------------- jobs --
   # Profiled out of `make up`; run explicitly by `make seed`.
 
   seeder:
     build:
       context: ./tools/seeder
+      args:
+        <<: *sci-args
     container_name: seeder
     profiles: ["tools"]
     networks: [voyager]
@@ -549,7 +733,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      <<: *data-env
+      <<: [*data-env, *datadog-env]
       DD_SERVICE: voyager-seeder
       DD_ENV: ${DD_ENV:-demo}
       SEED_RANDOM_SEED: ${SEED_RANDOM_SEED:-20260101}

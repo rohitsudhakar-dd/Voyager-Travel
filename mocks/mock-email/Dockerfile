@@ -20,4 +20,15 @@ COPY --from=build /app/dist ./dist
 
 USER node
 EXPOSE 4920
-CMD ["node", "dist/index.js"]
+
+# Source Code Integration. Baked at build time because the running container
+# has no git: without these two, an Error Tracking stack frame is text rather
+# than a link to the line on the default branch.
+ARG DD_GIT_REPOSITORY_URL=""
+ARG DD_GIT_COMMIT_SHA=""
+ENV DD_GIT_REPOSITORY_URL=$DD_GIT_REPOSITORY_URL \
+    DD_GIT_COMMIT_SHA=$DD_GIT_COMMIT_SHA
+
+# --require, not an import in the entrypoint: dd-trace patches modules as
+# they are loaded, so it has to win the race against fastify and pg.
+CMD ["node", "--require", "./dist/tracer.js", "dist/index.js"]
