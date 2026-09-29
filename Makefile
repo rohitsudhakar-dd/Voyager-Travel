@@ -16,7 +16,7 @@ s ?=
 
 .PHONY: help bootstrap build up up-full up-one down nuke seed seed-verify reset \
         logs migrate healthcheck chaos-reset scenario dd-apply dd-sourcemaps \
-        demo-mode idle-mode test deploy ps
+        demo-mode idle-mode test verify deploy ps
 
 help: ## List available targets
 	@echo "Voyager -- make targets"
@@ -117,7 +117,19 @@ healthcheck: ## Assert every service is healthy and all chaos flags are off
 	@echo "not yet implemented (phase 13)"
 
 test: ## Run all four test suites
-	@echo "not yet implemented (phase 3)"
+	@# The host has no Go toolchain, so the suites run in a throwaway
+	@# container against the working tree.
+	@for svc in search-service pricing-service; do \
+		echo "== $$svc =="; \
+		docker run --rm -v "$(PWD)/services/$$svc":/src -w /src golang:1.23-alpine \
+			sh -c 'go vet ./... && go test ./...' || exit 1; \
+	done
+	@echo "== python, typescript =="
+	@echo "not yet implemented (phases 4, 5, 7)"
+
+verify: ## Run the phase exit-criteria scripts against a running stack
+	@./scripts/verify-mocks.sh
+	@./scripts/verify-search.sh
 
 deploy: ## Pull, stamp DD_VERSION, build, rolling restart, migrate, healthcheck
 	@echo "not yet implemented (phase 13)"

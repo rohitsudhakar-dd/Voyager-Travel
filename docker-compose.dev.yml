@@ -28,6 +28,14 @@ services:
     ports:
       - "127.0.0.1:19092:19092"
 
+  search-service:
+    ports:
+      - "127.0.0.1:4010:4010"
+
+  pricing-service:
+    ports:
+      - "127.0.0.1:4020:4020"
+
   # The mocks are published so you can curl a provider directly while
   # debugging, without going through search-service.
   mock-gds:

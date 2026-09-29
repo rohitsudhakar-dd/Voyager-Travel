@@ -193,7 +193,7 @@ services:
       DD_ENV: ${DD_ENV:-demo}
       DD_VERSION: ${DD_VERSION:-dev}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      PAYMENT_WEBHOOK_URL: http://payment-service:4020/webhooks/payments
+      PAYMENT_WEBHOOK_URL: http://payment-service:4040/webhooks/payments
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4910/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s
@@ -250,6 +250,60 @@ services:
     mem_limit: 384m
 
   # ------------------------------------------------------------- services --
+
+  pricing-service:
+    build:
+      context: ./services/pricing-service
+    container_name: pricing-service
+    hostname: pricing-service
+    restart: unless-stopped
+    networks: [voyager]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *data-env
+      DD_SERVICE: voyager-pricing
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4020/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    mem_limit: 512m
+
+  search-service:
+    build:
+      context: ./services/search-service
+    container_name: search-service
+    hostname: search-service
+    restart: unless-stopped
+    networks: [voyager]
+    depends_on:
+      redis:
+        condition: service_healthy
+      pricing-service:
+        condition: service_healthy
+      mock-gds:
+        condition: service_healthy
+    environment:
+      DD_SERVICE: voyager-search
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      GDS_BASE_URL: http://mock-gds:4900
+      PRICING_BASE_URL: http://pricing-service:4020
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4010/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    mem_limit: 512m
 
   booking-service:
     build:
