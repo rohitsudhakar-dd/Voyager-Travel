@@ -1,29 +1,18 @@
-import { FRONTEND_CHAOS_FLAGS, type ChaosCatalog } from '@voyager/shared-schemas';
-import { readJson, readStored, writeJson } from '@/lib/storage';
-
 /**
  * The four `frontend_*` flags from 05-FUNCTIONALITY.md § 11, as the browser
  * sees them.
  *
- * Reading them is the awkward part. The only documented way to read chaos
- * state is `GET /api/v1/admin/chaos`, which is gated on the `X-Voyager-Admin`
- * header, and the storefront has no business holding that secret. So there are
- * two sources, tried in order:
+ * They come from `GET /api/v1/chaos/frontend` (§ 2.9), which is unauthenticated
+ * precisely so that a storefront tab can read them without holding
+ * ADMIN_SECRET. Until that endpoint existed the storefront read a localStorage
+ * mirror written by the Ops console, which meant the four flags only worked in a
+ * tab an operator had already visited /admin in -- so `loadgen-browser` never
+ * triggered them and scenario S8 had nothing to act on.
  *
- *   1. the admin endpoint, when this tab happens to hold the secret (i.e. the
- *      operator is on /admin);
- *   2. a same-origin mirror that the Ops console writes whenever it refreshes
- *      the catalogue, which is what makes the flags reach a storefront tab.
- *
- * Both fail open, exactly as the server-side chaos modules do: unreachable or
- * unreadable state means chaos is off. A demo must never break because the
+ * Reading fails open, exactly as the server-side chaos modules do: an
+ * unreachable gateway means chaos is off. A demo must never break because the
  * flag store hiccuped.
- *
- * Phase 6 could collapse this to one source by exposing an unauthenticated
- * read-only projection of the `frontend_*` flags; see the Phase 7 report.
  */
-
-export const MIRROR_KEY = 'voyager.frontendChaos';
 
 export interface FrontendChaosState {
   heavyAssets: boolean;
@@ -55,35 +44,6 @@ export function stateFromValues(values: Record<string, unknown>): FrontendChaosS
     jsErrorRate: asRate(values.frontend_js_error_rate),
     layoutShift: asBoolean(values.frontend_layout_shift),
   };
-}
-
-export function stateFromCatalog(catalog: ChaosCatalog): FrontendChaosState {
-  const values: Record<string, unknown> = {};
-  for (const flag of catalog.flags) {
-    if ((FRONTEND_CHAOS_FLAGS as readonly string[]).includes(flag.name)) {
-      values[flag.name] = flag.value;
-    }
-  }
-  return stateFromValues(values);
-}
-
-/** Written by the Ops console so storefront tabs can see the same flags. */
-export function mirrorFrontendChaos(catalog: ChaosCatalog): void {
-  const values: Record<string, unknown> = {};
-  for (const flag of catalog.flags) {
-    if ((FRONTEND_CHAOS_FLAGS as readonly string[]).includes(flag.name)) {
-      values[flag.name] = flag.value;
-    }
-  }
-  writeJson(MIRROR_KEY, values);
-}
-
-export function readMirroredChaos(): FrontendChaosState {
-  return stateFromValues(readJson<Record<string, unknown>>(MIRROR_KEY, {}));
-}
-
-export function hasAdminSecret(): boolean {
-  return Boolean(readStored('voyager.adminSecret', 'session'));
 }
 
 /**

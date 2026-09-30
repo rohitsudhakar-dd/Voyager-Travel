@@ -19,6 +19,7 @@ import {
   Modal,
   Select,
 } from '@/components/ui';
+import { startTiming, stopTiming } from '@/datadog/rum';
 import { formatMoney } from '@/lib/format';
 import { idempotencyKey } from '@/lib/ids';
 import { CheckoutShell, CheckoutSkeleton, HoldExpired } from './CheckoutShell';
@@ -129,6 +130,11 @@ export default function PaymentStep() {
     };
 
     setOutcome(null);
+    stopTiming('checkout_step_duration');
+    // Confirmation is asynchronous (§ 3 step 9), so this clock crosses two
+    // views and is stopped by the confirmation page.
+    startTiming('time_to_confirmation');
+
     try {
       const result = await authorize.mutateAsync(body);
 

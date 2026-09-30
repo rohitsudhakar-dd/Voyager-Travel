@@ -143,3 +143,19 @@ export const FRONTEND_CHAOS_FLAGS = [
   'frontend_layout_shift',
 ] as const;
 export type FrontendChaosFlag = (typeof FRONTEND_CHAOS_FLAGS)[number];
+
+/**
+ * `GET /chaos/frontend` (05-FUNCTIONALITY.md § 2.9). Deliberately not the
+ * self-describing `ChaosCatalog` shape: this response is unauthenticated, so it
+ * carries values and nothing else -- no defaults, no injection points, and no
+ * evidence that the other thirty-four flags exist.
+ */
+export const frontendChaosSchema = z.object({
+  flags: z.object({
+    frontend_heavy_assets: z.boolean(),
+    frontend_blocking_js: z.boolean(),
+    frontend_js_error_rate: z.number(),
+    frontend_layout_shift: z.boolean(),
+  }),
+});
+export type FrontendChaosResponse = z.infer<typeof frontendChaosSchema>;

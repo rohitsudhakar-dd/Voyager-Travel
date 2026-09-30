@@ -59,6 +59,11 @@ export const endpoints = {
     conversation: (id: string) => `/v1/support/conversations/${id}`,
   },
 
+  /** Unauthenticated, read-only, four flags (05-FUNCTIONALITY.md § 2.9). */
+  chaos: {
+    frontend: '/v1/chaos/frontend',
+  },
+
   admin: {
     chaos: '/v1/admin/chaos',
     chaosReset: '/v1/admin/chaos/reset',

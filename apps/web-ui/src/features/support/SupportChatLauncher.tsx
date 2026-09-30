@@ -6,6 +6,7 @@ import { request, stream } from '@/api/client';
 import { endpoints } from '@/api/endpoints';
 import { errorMessage } from '@/api/errors';
 import { Alert, IconButton, Input } from '@/components/ui';
+import { startTiming, stopTiming } from '@/datadog/rum';
 import { cn } from '@/lib/cn';
 import { useFocusTrap } from '@/lib/hooks';
 
@@ -81,6 +82,8 @@ export function SupportChatLauncher() {
     const controller = new AbortController();
     abort.current = controller;
 
+    startTiming('support_first_token');
+
     try {
       const id = await ensureConversation();
       await stream(endpoints.support.messages(id), {
@@ -90,6 +93,9 @@ export function SupportChatLauncher() {
         onEvent: (data) => {
           const parsed = supportStreamEventSchema.safeParse(safeJson(data));
           if (!parsed.success) return;
+          // `stopTiming` clears its own mark, so only the first token of the
+          // turn is reported and the rest of the stream costs nothing.
+          if (parsed.data.type === 'token') stopTiming('support_first_token');
           applyEvent(parsed.data, update, setFailure);
         },
       });

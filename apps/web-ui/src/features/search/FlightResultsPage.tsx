@@ -15,6 +15,7 @@ import { useFlightSearch, useSearchResultPage } from '@/api/hooks/search';
 import { hasErrorType } from '@/api/errors';
 import { queryKeys } from '@/api/queryClient';
 import { useBlockingJs, useDelayedBanner, useInjectedJsError } from '@/chaos/ChaosProvider';
+import { useResultsTelemetry } from '@/datadog/hooks';
 import { PageContainer } from '@/components/layout/Page';
 import { Badge, Button, Drawer, Select } from '@/components/ui';
 import { useElapsed, useMediaQuery } from '@/lib/hooks';
@@ -159,6 +160,17 @@ export default function FlightResultsPage() {
 
   const currency = accumulated[0]?.fare.currency ?? 'GBP';
   const filterCount = activeFilterCount(criteria.filters);
+
+  useResultsTelemetry({
+    route: `${criteria.origin}-${criteria.destination}`,
+    cabin: criteria.cabin,
+    resultCount: total,
+    cacheHit: results.data?.cacheHit,
+    firstResultPainted: accumulated.length > 0,
+    // The airline list is what the filter panel's checkboxes are built from, so
+    // the filters are not usable until it has arrived, however fast the fares did.
+    filtersUsable: accumulated.length > 0 && airlines.data !== undefined,
+  });
 
   const filterPanel = (
     <FlightFilterPanel

@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { adminSecret, clearAdminSecret, setAdminSecret } from '@/api/tokens';
 import { useAdminStatus, useChaosCatalog } from '@/api/hooks/admin';
-import { mirrorFrontendChaos } from '@/chaos/frontendChaos';
 import { Badge, Button, Card, CardBody, Input } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { ChaosPanel } from './ChaosPanel';
@@ -92,12 +91,6 @@ function Console({ onSignOut }: { onSignOut: () => void }) {
 
   const status = useAdminStatus(true);
   const chaos = useChaosCatalog(true);
-
-  // Storefront tabs cannot call the admin API, so the console publishes the
-  // four `frontend_*` flags where they can read them.
-  useEffect(() => {
-    if (chaos.data) mirrorFrontendChaos(chaos.data);
-  }, [chaos.data]);
 
   const activeCount = status.data?.activeFlagCount ?? chaos.data?.activeFlags.length ?? 0;
 

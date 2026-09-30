@@ -28,6 +28,14 @@ services:
     ports:
       - "127.0.0.1:19092:19092"
 
+  # Reaching the SPA without going through Caddy, which on `localhost` redirects
+  # to HTTPS and presents a certificate from its own CA. This origin is also the
+  # only one that is genuinely cross-origin to the gateway, so it is what the
+  # browser RUM tracing headers and the gateway CORS config are exercised against.
+  web-ui:
+    ports:
+      - "127.0.0.1:8080:8080"
+
   api-gateway:
     ports:
       - "127.0.0.1:4000:4000"

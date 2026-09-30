@@ -51,7 +51,7 @@ s ?=
 .PHONY: help bootstrap build up up-full up-one web-ui down nuke seed seed-verify reset \
         logs migrate dbm-setup healthcheck chaos chaos-reset scenario scenarios \
         dd-apply dd-sourcemaps demo-mode idle-mode test verify verify-tracing verify-streams deploy ps \
-        test-web test-node test-python test-go verify-edge verify-llmobs verify-dbm
+        test-web test-node test-python test-go verify-edge verify-llmobs verify-rum verify-dbm
 
 help: ## List available targets
 	@echo "Voyager -- make targets"
@@ -203,6 +203,7 @@ verify: ## Run the phase exit-criteria scripts against a running stack
 	@./scripts/verify-booking.sh
 	@./scripts/verify-gateway.sh
 	@./scripts/verify-edge.sh
+	@./scripts/verify-rum.sh
 	@echo
 	@echo "Span-level tracing checks are not run here: they stop and restart six"
 	@echo "services. Run them on their own with 'make verify-tracing', and the"
@@ -225,6 +226,9 @@ verify-streams: ## Phase 10 Data Streams and Kafka chaos (pauses a consumer grou
 
 verify-edge: ## Phase 13 exit criteria for the edge proxy and port exposure
 	@./scripts/verify-edge.sh
+
+verify-rum: ## Phase 9 exit criteria (drives one real browser session; sets chaos)
+	@./scripts/verify-rum.sh
 
 verify-rum: ## Phase 9 exit criteria (drives one real browser session; sets chaos)
 	@./scripts/verify-rum.sh

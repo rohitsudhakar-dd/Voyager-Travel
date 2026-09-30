@@ -12,6 +12,7 @@ import {
   QuantityStepper,
   Toggle,
 } from '@/components/ui';
+import { stopTiming } from '@/datadog/rum';
 import { formatMoney, priceBand } from '@/lib/format';
 import { toast } from '@/store/toasts';
 import { CheckoutShell, CheckoutSkeleton } from './CheckoutShell';
@@ -304,7 +305,10 @@ export default function ReviewStep() {
           size="lg"
           loading={save.isPending}
           data-testid="review-continue"
-          onClick={() => navigate(`/checkout/${booking.id}/passengers`)}
+          onClick={() => {
+            stopTiming('checkout_step_duration');
+            navigate(`/checkout/${booking.id}/passengers`);
+          }}
         >
           Continue to travellers
         </Button>

@@ -152,6 +152,22 @@ All require header `X-Voyager-Admin: ${ADMIN_SECRET}`. Return `401` otherwise, w
 
 Generated bookings carry a contact address on `loadgen.voyager.demo`, which exists nowhere and marks a booking as synthetic for anyone querying or clearing out demo data.
 
+### 2.9 Frontend chaos projection
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/chaos/frontend` | **Unauthenticated, read-only.** `{"flags": {"frontend_heavy_assets": bool, "frontend_blocking_js": bool, "frontend_js_error_rate": float, "frontend_layout_shift": bool}}` — the four Frontend flags of § 11 and nothing else. |
+
+The rest of the chaos surface is gated on `X-Voyager-Admin` and must stay that way: it can drop an index, shrink a connection pool and pause a consumer group. But the four `frontend_*` flags are only ever *read*, and only by a browser, and a storefront tab has no business holding `ADMIN_SECRET`. Without this projection those four flags can never fire in a real session — which means `loadgen-browser` never triggers them and scenario S8 has nothing to act on.
+
+Three properties are load-bearing:
+
+- **Narrow by construction.** The handler names the four flags itself rather than filtering the catalogue by group, so a flag added to the wrong group cannot leak through it. Nothing in the response reveals that the other 34 flags exist — no defaults, no injection points, no flag list.
+- **No writes.** `GET` only. Every mutation stays on `PUT /admin/chaos`.
+- **Fails open**, like every other chaos reader (§ 10.1). An unreachable Redis answers "all off" rather than `500`; a cache hiccup must not take the storefront's render path down with it.
+
+Answered with `Cache-Control: no-store`, because the browser polls it every 5 seconds and a cached answer would make a toggle look like it did nothing.
+
 ---
 
 ## 3. Data model

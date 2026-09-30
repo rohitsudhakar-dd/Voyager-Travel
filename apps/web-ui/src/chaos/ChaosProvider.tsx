@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import type { ChaosCatalog } from '@voyager/shared-schemas';
+import type { FrontendChaosResponse } from '@voyager/shared-schemas';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { request } from '@/api/client';
 import { endpoints } from '@/api/endpoints';
@@ -8,47 +8,32 @@ import {
   CHAOS_OFF,
   type FrontendChaosState,
   InjectedChaosError,
-  MIRROR_KEY,
-  hasAdminSecret,
-  readMirroredChaos,
   runBlockingTask,
-  stateFromCatalog,
+  stateFromValues,
 } from './frontendChaos';
 
 const ChaosContext = createContext<FrontendChaosState>(CHAOS_OFF);
 
+/** The same 2 s cache the server-side chaos readers use, doubled: a browser tab
+ * polling every two seconds is a lot of requests for four booleans, and five
+ * seconds still feels instant on stage. */
 const POLL_MS = 5_000;
 
 export function ChaosProvider({ children }: { children: React.ReactNode }) {
-  const canReadDirectly = hasAdminSecret();
-
   const { data } = useQuery({
     queryKey: queryKeys.frontendChaos,
-    queryFn: ({ signal }) => request<ChaosCatalog>(endpoints.admin.chaos, { admin: true, signal }),
-    enabled: canReadDirectly,
+    queryFn: ({ signal }) =>
+      request<FrontendChaosResponse>(endpoints.chaos.frontend, { signal }),
     refetchInterval: POLL_MS,
-    // Fail open. A 401 or an unreachable gateway means chaos is off, and must
-    // not retry-storm the admin endpoint from every storefront tab.
+    // Fail open. An unreachable gateway means chaos is off, and must not
+    // retry-storm from every open tab.
     retry: false,
   });
 
-  const [mirrored, setMirrored] = useState<FrontendChaosState>(() => readMirroredChaos());
-
-  useEffect(() => {
-    if (canReadDirectly) return;
-    const reread = () => setMirrored(readMirroredChaos());
-    const onStorage = (event: StorageEvent) => {
-      if (event.key === null || event.key === MIRROR_KEY) reread();
-    };
-    window.addEventListener('storage', onStorage);
-    const timer = window.setInterval(reread, POLL_MS);
-    return () => {
-      window.removeEventListener('storage', onStorage);
-      window.clearInterval(timer);
-    };
-  }, [canReadDirectly]);
-
-  const state = useMemo(() => (data ? stateFromCatalog(data) : mirrored), [data, mirrored]);
+  const state = useMemo(
+    () => (data ? stateFromValues(data.flags) : CHAOS_OFF),
+    [data],
+  );
 
   return <ChaosContext.Provider value={state}>{children}</ChaosContext.Provider>;
 }

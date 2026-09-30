@@ -14,6 +14,7 @@ import { useHotelSearch, useSearchResultPage } from '@/api/hooks/search';
 import { hasErrorType } from '@/api/errors';
 import { queryKeys } from '@/api/queryClient';
 import { useBlockingJs, useDelayedBanner, useInjectedJsError } from '@/chaos/ChaosProvider';
+import { useResultsTelemetry } from '@/datadog/hooks';
 import { PageContainer } from '@/components/layout/Page';
 import { Badge, Button, Drawer, Select } from '@/components/ui';
 import { formatCount, formatDateWithDay, pluralise } from '@/lib/format';
@@ -158,6 +159,19 @@ export default function HotelResultsPage() {
 
   const currency = accumulated[0]?.currency ?? 'GBP';
   const filterCount = activeFilterCount(criteria.filters);
+
+  useResultsTelemetry({
+    route: criteria.city,
+    // Hotels have no cabin, and dropping the attribute would make the two
+    // results views un-comparable on the one dashboard that shows both.
+    cabin: 'n/a',
+    resultCount: total,
+    cacheHit: results.data?.cacheHit,
+    firstResultPainted: accumulated.length > 0,
+    // The star-rating and amenity facets are derived from the loaded page, so
+    // they are only complete once the first page has finished arriving.
+    filtersUsable: accumulated.length > 0 && !searching,
+  });
 
   const filterPanel = (
     <HotelFilterPanel

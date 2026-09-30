@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageContainer } from '@/components/layout/Page';
 import { Button, Card, CardBody, CheckoutStepper, CountdownTimer, Skeleton } from '@/components/ui';
+import { useCheckoutStepTiming } from '@/datadog/hooks';
 import { useTimeRemaining } from '@/lib/hooks';
 import { PriceSummary } from './PriceSummary';
 
@@ -32,6 +33,10 @@ export function CheckoutShell({
   const navigate = useNavigate();
   const remaining = useTimeRemaining(booking.holdExpiresAt);
   const expired = booking.state === 'EXPIRED' || (remaining !== null && remaining <= 0);
+
+  // The clock lives here, where every step already passes through, so each step
+  // only has to say when it was submitted.
+  useCheckoutStepTiming(step);
 
   if (expired) return <HoldExpired booking={booking} />;
 

@@ -3,6 +3,7 @@ import { CalendarPlus, CheckCircle2, Mail, Sparkles } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useBookingDetail } from '@/api/hooks/booking';
+import { trackAction, stopTiming } from '@/datadog/rum';
 import { PageContainer } from '@/components/layout/Page';
 import {
   Alert,
@@ -115,17 +116,23 @@ function Confirmed({ detail }: { detail: BookingDetailResponse }) {
     if (announced.current) return;
     announced.current = true;
     toast.success('Booking confirmed', booking.pnr ? `Reference ${booking.pnr}` : undefined);
-  }, [booking.pnr]);
+
+    // Emitted in code rather than declared on an element: this is the bottom of
+    // the funnel in 06-USER-FLOWS.md § 8 and nobody clicks anything to reach it,
+    // so `trackUserInteractions` would never collect it.
+    stopTiming('time_to_confirmation');
+    trackAction('Booking confirmed', {
+      product_type: booking.productType,
+      price_band: priceBand(booking.totalCents),
+      points_earned: loyalty?.pointsEarned ?? 0,
+    });
+  }, [booking.pnr, booking.productType, booking.totalCents, loyalty?.pointsEarned]);
 
   return (
     <PageContainer className="py-10">
       <div
         className="flex flex-col items-center text-center"
         data-testid="confirmation"
-        data-dd-action-name="Booking confirmed"
-        data-product-type={booking.productType}
-        data-price-band={priceBand(booking.totalCents)}
-        data-points-earned={loyalty?.pointsEarned ?? 0}
       >
         <CheckCircle2 aria-hidden className="h-14 w-14 text-success-500" />
         <h1 className="mt-3 text-display-sm">You're booked</h1>

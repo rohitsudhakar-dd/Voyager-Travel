@@ -5,6 +5,7 @@ import { request } from '@/api/client';
 import { endpoints } from '@/api/endpoints';
 import { queryKeys } from '@/api/queryClient';
 import { tokens } from '@/api/tokens';
+import { clearRumUser, setRumUser } from '@/datadog/rum';
 
 /**
  * Auth state. Deliberately simple -- email and password, a 15-minute access
@@ -22,6 +23,17 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+/** Attribute names are 06-USER-FLOWS.md § 7.2 verbatim, hence `signup_cohort`. */
+function identify(user: User): void {
+  setRumUser({
+    id: user.id,
+    email: user.email,
+    name: `${user.firstName} ${user.lastName}`.trim(),
+    tier: user.tier,
+    signup_cohort: user.signupCohort ?? null,
+  });
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
   const [hasToken, setHasToken] = useState(() => Boolean(tokens.access));
@@ -35,6 +47,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     retry: false,
     staleTime: 60_000,
   });
+
+  // A reload restores the token from storage without going through `login`, so
+  // the session is re-identified from whatever /auth/me answers. Without this
+  // every page a signed-in traveller reloads onto is attributed to a guest.
+  useEffect(() => {
+    if (me.data) identify(me.data);
+  }, [me.data]);
 
   const loginMutation = useMutation({
     mutationFn: (credentials: LoginRequest) =>
@@ -50,6 +69,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const adopt = (response: AuthResponse) => {
       tokens.set({ accessToken: response.accessToken, refreshToken: response.refreshToken });
       queryClient.setQueryData(queryKeys.me, response.user);
+      identify(response.user);
       return response.user;
     };
 
@@ -70,6 +90,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // A failed logout still clears the client; the refresh token expires
           // on its own after 30 days.
         }
+        clearRumUser();
         tokens.clear();
         queryClient.removeQueries({ queryKey: queryKeys.me });
         queryClient.removeQueries({ queryKey: queryKeys.account });

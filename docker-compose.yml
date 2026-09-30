@@ -703,6 +703,10 @@ services:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
         VITE_USE_MOCKS: ${VITE_USE_MOCKS:-false}
         VITE_DD_SITE: ${DD_SITE:-datadoghq.com}
+        VITE_DD_RUM_APPLICATION_ID: ${VITE_DD_RUM_APPLICATION_ID:-}
+        VITE_DD_RUM_CLIENT_TOKEN: ${VITE_DD_RUM_CLIENT_TOKEN:-}
+        RUM_SESSION_SAMPLE_RATE: ${RUM_SESSION_SAMPLE_RATE:-100}
+        RUM_SESSION_REPLAY_SAMPLE_RATE: ${RUM_SESSION_REPLAY_SAMPLE_RATE:-100}
         # VITE_DD_ENV, VITE_DD_VERSION and VITE_DD_GIT_COMMIT_SHA are derived
         # in the Dockerfile from DD_ENV, DD_VERSION and DD_GIT_COMMIT_SHA
         # above. Passing them here as well would give one value two sources

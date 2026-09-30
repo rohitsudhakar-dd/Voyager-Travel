@@ -38,12 +38,26 @@ ARG VITE_USE_MOCKS=false
 # origin that served the page.
 ARG VITE_API_BASE_URL=/api
 ARG VITE_DD_SITE=datadoghq.com
+# Both RUM credentials are publishable by design -- a client token is meant to
+# ship in a bundle -- but they are empty by default so an image built without
+# them runs with RUM off rather than pointing at somebody else's application.
+ARG VITE_DD_RUM_APPLICATION_ID=""
+ARG VITE_DD_RUM_CLIENT_TOKEN=""
+# 02-TECH-STACK.md § 7.1 names these without the VITE_ prefix, because they also
+# configure the RUM application itself. Renamed here rather than duplicated in
+# .env, so the sample rate has exactly one source.
+ARG RUM_SESSION_SAMPLE_RATE=100
+ARG RUM_SESSION_REPLAY_SAMPLE_RATE=100
 ENV VITE_USE_MOCKS=${VITE_USE_MOCKS} \
     VITE_API_BASE_URL=${VITE_API_BASE_URL} \
     VITE_DD_SITE=${VITE_DD_SITE} \
     VITE_DD_ENV=${DD_ENV} \
     VITE_DD_VERSION=${DD_VERSION} \
-    VITE_DD_GIT_COMMIT_SHA=${DD_GIT_COMMIT_SHA}
+    VITE_DD_GIT_COMMIT_SHA=${DD_GIT_COMMIT_SHA} \
+    VITE_DD_RUM_APPLICATION_ID=${VITE_DD_RUM_APPLICATION_ID} \
+    VITE_DD_RUM_CLIENT_TOKEN=${VITE_DD_RUM_CLIENT_TOKEN} \
+    VITE_RUM_SESSION_SAMPLE_RATE=${RUM_SESSION_SAMPLE_RATE} \
+    VITE_RUM_SESSION_REPLAY_SAMPLE_RATE=${RUM_SESSION_REPLAY_SAMPLE_RATE}
 
 RUN npm run build
 

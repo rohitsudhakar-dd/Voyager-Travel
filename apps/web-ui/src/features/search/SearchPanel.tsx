@@ -23,6 +23,7 @@ import {
   Tabs,
 } from '@/components/ui';
 import { cn } from '@/lib/cn';
+import { startTiming } from '@/datadog/rum';
 import { errorMessage, errorRequestId } from '@/api/errors';
 import { useQueryClient } from '@tanstack/react-query';
 import { PassengerSelect } from './PassengerSelect';
@@ -180,6 +181,13 @@ function FlightSearchForm({ initial }: { initial?: FlightSearchRequest }) {
     }
 
     setFieldErrors({});
+
+    // Both clocks start here rather than on the results route: 06-USER-FLOWS.md
+    // § 7.1 measures from the moment the traveller pressed Search, and the
+    // search itself runs on this screen.
+    startTiming('time_to_first_result');
+    startTiming('time_to_interactive_results');
+
     const response = await search.mutateAsync(parsed.data);
 
     // Seed page 1 so the results screen renders without a second round trip.
@@ -349,6 +357,9 @@ function HotelSearchForm({ initial }: { initial?: HotelSearchRequest }) {
     }
 
     setFieldErrors({});
+    startTiming('time_to_first_result');
+    startTiming('time_to_interactive_results');
+
     const response = await search.mutateAsync(parsed.data);
     navigate({
       pathname: `/results/hotels/${response.searchId}`,

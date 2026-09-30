@@ -36,6 +36,9 @@ The load generator drives all three customer personas in realistic proportions (
 | `/account` | Profile, booking history, loyalty | `/account` | required |
 | `/login`, `/signup` | Auth | `/login`, `/signup` | none |
 | `/admin` | Ops console (Chaos / Scenarios / Load / Status / Data) | `/admin` | admin secret |
+| anything else | Not found | `/not-found` | none |
+
+`/not-found` is a view name rather than an omission on purpose. RUM has to call the view something, and leaving it unnamed would charge a mistyped URL's resources and errors to whichever screen the visitor came from.
 
 **RUM view naming rule:** use the *pattern*, never the instantiated path. `/results/flights`, not `/results/flights/srch_01J8XYZ`. Instance IDs go in view attributes. Getting this wrong produces thousands of one-off views and makes RUM analytics useless.
 

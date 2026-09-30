@@ -450,6 +450,8 @@ WEB_BASE_URL=http://web-ui:8080            # origin loadgen-browser opens, so RU
 
 `GATEWAY_BASE_URL` and `WEB_BASE_URL` follow the existing `<SERVICE>_BASE_URL` convention and exist because the two generators are the only containers that address the front door rather than a downstream service. On a deployed host `WEB_BASE_URL` should be the public HTTPS origin, since RUM and Session Replay behave differently over plain HTTP and a generator on the wrong scheme produces sessions that do not match the ones people create.
 
+`RUM_SESSION_SAMPLE_RATE` and `RUM_SESSION_REPLAY_SAMPLE_RATE` carry no `VITE_` prefix because they describe the RUM application as a whole, but the browser is the only thing that reads them. `apps/web-ui/Dockerfile` therefore takes them as build args and re-exports them as `VITE_RUM_SESSION_SAMPLE_RATE` and `VITE_RUM_SESSION_REPLAY_SAMPLE_RATE`, exactly as it already derives `VITE_DD_ENV` from `DD_ENV`. Both renamed pairs exist so a value has one source in `.env` rather than two that can disagree — and, like every `VITE_*` value, they are baked into the bundle at build time, so changing one means rebuilding `web-ui` rather than restarting it.
+
 ### 7.2 Per-service Datadog variables
 
 Every first-party service container gets, at minimum:

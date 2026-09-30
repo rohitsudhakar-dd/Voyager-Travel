@@ -13,13 +13,16 @@ import rateLimit from '@fastify/rate-limit';
 import Fastify from 'fastify';
 
 import { principalOf } from './auth';
+import { startCartSweeper } from './cart';
 import { config, redacted } from './config';
 import { closeDeps, createDeps, reportedVersion } from './deps';
 import { VoyagerError } from './errors';
 import { log } from './logger';
+import { closeMetrics, startChaosFlagsGauge } from './metrics';
 import { registerAdminRoutes } from './routes/admin';
 import { registerAuthRoutes } from './routes/auth';
 import { registerBffRoutes } from './routes/bff';
+import { registerChaosRoutes } from './routes/chaos';
 import { registerProxyRoutes } from './routes/proxy';
 import { registerReferenceRoutes } from './routes/reference';
 import { tag } from './tracing';
@@ -55,7 +58,20 @@ async function main(): Promise<void> {
       'idempotency-key',
       'x-request-id',
       'x-voyager-admin',
+      // Browser RUM attaches these to every call named by `allowedTracingUrls`
+      // (02-TECH-STACK.md § 5.1: datadog + tracecontext). When the SPA and the
+      // gateway are not same-origin the preflight decides whether they are sent
+      // at all, and a preflight that omits them does not fail the request -- the
+      // browser simply drops the headers, RUM sessions and APM traces stop
+      // linking, and nothing anywhere reports an error.
+      'x-datadog-trace-id',
+      'x-datadog-parent-id',
+      'x-datadog-origin',
+      'x-datadog-sampling-priority',
+      'traceparent',
+      'tracestate',
     ],
+    exposedHeaders: ['x-request-id'],
   });
 
   await app.register(rateLimit, {
@@ -177,11 +193,18 @@ async function main(): Promise<void> {
   registerReferenceRoutes(app, deps);
   registerProxyRoutes(app, deps);
   registerBffRoutes(app, deps);
+  registerChaosRoutes(app, deps);
   registerAdminRoutes(app, deps);
+
+  const chaosGauge = startChaosFlagsGauge(() => deps.chaos.activeFlags());
+  const cartSweeper = startCartSweeper(deps);
 
   const shutdown = async (signal: string) => {
     log.info({ signal }, 'Shutting down');
+    clearInterval(chaosGauge);
+    clearInterval(cartSweeper);
     await app.close();
+    closeMetrics();
     await closeDeps(deps);
     process.exit(0);
   };

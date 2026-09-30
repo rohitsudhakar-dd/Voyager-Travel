@@ -21,6 +21,8 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@datadog/browser-logs": "5.35.1",
+    "@datadog/browser-rum": "5.35.1",
     "@hookform/resolvers": "3.9.0",
     "@tanstack/react-query": "5.56.2",
     "clsx": "2.1.1",

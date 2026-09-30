@@ -11,6 +11,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { z } from 'zod';
 import { useBookingDetail, useSavePassengers } from '@/api/hooks/booking';
 import { errorMessage } from '@/api/errors';
+import { stopTiming } from '@/datadog/rum';
 import { useAuth } from '@/features/auth/AuthProvider';
 import { Alert, Card, CardBody, CardHeader, CardTitle, Input, Select } from '@/components/ui';
 import { Button } from '@/components/ui';
@@ -91,6 +92,7 @@ function PassengerForm({ booking }: { booking: Booking }) {
   const { fields } = useFieldArray({ control: form.control, name: 'passengers' });
 
   const submit = form.handleSubmit(async (values) => {
+    stopTiming('checkout_step_duration');
     try {
       await save.mutateAsync(values);
       navigate(`/checkout/${booking.id}/payment`);
