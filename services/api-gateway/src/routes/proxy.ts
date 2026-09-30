@@ -175,7 +175,7 @@ export function registerProxyRoutes(app: FastifyInstance, deps: Deps): void {
       timeoutMs: PAYMENT_TIMEOUT_MS,
     });
     await closeSettledCart(deps, body);
-    return body;
+    return authorizeResult(request, body);
   });
 
   app.post('/api/v1/payments/:id/3ds/complete', async (request, reply) => {
@@ -187,7 +187,7 @@ export function registerProxyRoutes(app: FastifyInstance, deps: Deps): void {
       timeoutMs: PAYMENT_TIMEOUT_MS,
     });
     await closeSettledCart(deps, body);
-    return body;
+    return authorizeResult(request, body);
   });
 
   app.get('/api/v1/payments/:id', async (request, reply) => {
@@ -289,6 +289,55 @@ async function closeSettledCart(deps: Deps, body: unknown): Promise<void> {
   if (!payment?.bookingId || !payment.state) return;
   if (!SETTLED_PAYMENT_STATES.has(payment.state)) return;
   await closeCart(deps, payment.bookingId);
+}
+
+/**
+ * The payment, the booking it paid for, and the 3DS step-up if there is one.
+ *
+ * payment-service answers with the payment alone, because it knows nothing
+ * about bookings. The payment screen needs all three: it reads the payment
+ * state to decide between a decline and a success, and the booking to know
+ * where to send the traveller next. Given the bare payment it reads `state`
+ * off `undefined`, which throws, and the throw lands in the same catch that
+ * handles a declined card -- so a perfectly good authorization leaves the
+ * traveller sitting on the payment screen being told to try another card.
+ *
+ * The booking is fetched rather than trusted from the request because
+ * authorizing moves it to PENDING_PAYMENT, and a stale copy would show the
+ * traveller the state they had before they paid.
+ */
+async function authorizeResult(request: FastifyRequest, payment: unknown): Promise<unknown> {
+  const record = (payment ?? {}) as Record<string, unknown>;
+  const bookingId = String(record.bookingId ?? '');
+
+  let booking: unknown = null;
+  if (bookingId) {
+    try {
+      booking = (
+        await callService<unknown>('booking', {
+          path: `/v1/bookings/${encodeURIComponent(bookingId)}`,
+          requestId: request.id,
+          timeoutMs: BOOKING_TIMEOUT_MS,
+        })
+      ).body;
+    } catch {
+      // The money has already moved. Losing the booking here costs the screen
+      // its summary, and is not a reason to tell the traveller the payment
+      // failed.
+    }
+  }
+
+  return {
+    payment: record,
+    booking,
+    threeDsChallenge:
+      record.state === 'REQUIRES_3DS'
+        ? {
+            challengeId: String(record.id ?? ''),
+            prompt: 'Your bank needs to confirm this payment.',
+          }
+        : null,
+  };
 }
 
 async function forward(
