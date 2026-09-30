@@ -14,6 +14,7 @@ import { accrue, findFareMultiplier, UnknownBookingError, UnknownUserError } fro
 import { MalformedEventError, parseEnvelope, readConfirmedBooking } from './events';
 import { kafka } from './kafka';
 import type { Logger } from './logger';
+import * as metrics from './metrics';
 import { computePoints } from './points';
 import { span, tag } from './tracing';
 import { publishPointsAccrued, publishTierUpgraded } from './producer';
@@ -137,6 +138,14 @@ async function handleConfirmed(
     'Points accrued',
   );
 
+  // Below the `result.duplicate` return above, so a redelivered event does not
+  // award the points twice in the metric when it did not award them twice in
+  // the ledger.
+  metrics.pointsAccrued(result.points, {
+    tier: earnedAtTier ?? result.tierAfter,
+    product: booking.productType,
+  });
+
   // Publishing happens after the commit: the accrual is the record of truth,
   // and a failed publish must not roll it back or award it twice.
   const accrued = await publishPointsAccrued(
@@ -173,6 +182,7 @@ async function handleConfirmed(
       },
       'Tier upgraded',
     );
+    metrics.tierUpgraded({ fromTier: result.tierBefore, toTier: result.tierAfter });
     await publishTierUpgraded(
       {
         userId: booking.userId,

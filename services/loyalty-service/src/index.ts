@@ -25,6 +25,7 @@ import {
 import { NotFoundError, toEnvelope, ValidationError, VoyagerError } from './errors';
 import { pingKafka } from './kafka';
 import { createLogger } from './logger';
+import { closeMetrics, initMetrics } from './metrics';
 import { computePoints, nextTier, Tier, tierFor, TIER_EARN_MULTIPLIER } from './points';
 import { span, tag } from './tracing';
 import { startProducer, stopProducer } from './producer';
@@ -327,6 +328,7 @@ function connectKafkaInBackground(): void {
 }
 
 async function start(): Promise<void> {
+  initMetrics(logger);
   chaos.initChaos(config.redisUrl);
   await app.listen({ port: config.port, host: config.host });
   connectKafkaInBackground();
@@ -351,6 +353,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     await stopConsumer();
     await stopProducer();
     await chaos.closeChaos();
+    closeMetrics();
     await pool.end().catch(() => {});
     process.exit(0);
   });

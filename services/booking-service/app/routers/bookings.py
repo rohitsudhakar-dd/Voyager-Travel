@@ -9,7 +9,7 @@ import structlog
 from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel, EmailStr, Field
 
-from app import clients, db, tracing
+from app import clients, db, metrics, tracing
 from app.domain import validation
 from app.domain.states import BookingState, Trigger
 from app.errors import HoldExpiredError, ValidationError
@@ -98,6 +98,11 @@ async def create_booking(body: CreateBooking) -> dict:
     base_cents = (fare["baseAmountCents"] + fare["adjustmentsCents"]) * total_people
     taxes_cents = fare["taxesCents"] * total_people
 
+    # Read once, here, and carried on the booking from now on. The `tier` tag on
+    # every later booking metric comes off this snapshot, and the confirmation
+    # arrives from Kafka where there is nothing left to ask.
+    tier = await metrics.lookup_tier(body.userId)
+
     segment = (offer.get("segments") or [{}])[0]
     items = [
         {
@@ -131,6 +136,7 @@ async def create_booking(body: CreateBooking) -> dict:
             contact_phone=body.contactPhone,
             metadata={
                 "passengerCounts": body.passengerCounts,
+                "userTier": tier,
                 "departDate": segment.get("departureTime", "")[:10],
                 "origin": segment.get("origin"),
                 "destination": segment.get("destination"),
@@ -149,6 +155,7 @@ async def create_booking(body: CreateBooking) -> dict:
         correlation_id=current_request_id(),
     )
     tracing.tag_booking(booking)
+    metrics.booking_created(product=booking["product_type"], tier=tier)
     log.info(
         "Booking created",
         booking={

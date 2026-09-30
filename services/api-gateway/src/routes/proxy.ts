@@ -13,6 +13,7 @@ import type * as StreamWeb from 'node:stream/web';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { principalOf, requirePrincipal } from '../auth';
+import { advanceCart, closeCart } from '../cart';
 import { config } from '../config';
 import { ValidationError } from '../errors';
 import { callService, type Upstream } from '../http';
@@ -24,7 +25,10 @@ const BOOKING_TIMEOUT_MS = 15_000;
 /** Authorization can sit behind payment_latency_ms for several seconds. */
 const PAYMENT_TIMEOUT_MS = 25_000;
 
-export function registerProxyRoutes(app: FastifyInstance, _deps: Deps): void {
+/** Payment states that mean the traveller has paid and the cart is not abandoned. */
+const SETTLED_PAYMENT_STATES = new Set(['AUTHORIZED', 'CAPTURED']);
+
+export function registerProxyRoutes(app: FastifyInstance, deps: Deps): void {
   // ------------------------------------------------------------- search --
 
   app.post('/api/v1/search/flights', async (request, reply) =>
@@ -93,12 +97,18 @@ export function registerProxyRoutes(app: FastifyInstance, _deps: Deps): void {
   for (const part of ['passengers', 'ancillaries'] as const) {
     app.put(`/api/v1/bookings/:id/${part}`, async (request, reply) => {
       const { id } = request.params as { id: string };
-      return forward(request, reply, 'booking', {
+      const body = await forward(request, reply, 'booking', {
         method: 'PUT',
         path: `/v1/bookings/${encodeURIComponent(id)}/${part}`,
         body: request.body,
         timeoutMs: BOOKING_TIMEOUT_MS,
       });
+      // Ancillaries are bought on the review screen, so they are not a rung of
+      // their own -- only naming the passengers moves the traveller on.
+      if (part === 'passengers' && reply.statusCode < 300) {
+        await advanceCart(deps, id, 'passengers');
+      }
+      return body;
     });
   }
 
@@ -144,23 +154,34 @@ export function registerProxyRoutes(app: FastifyInstance, _deps: Deps): void {
     if (!key) {
       throw new ValidationError('An Idempotency-Key header is required.');
     }
-    return forward(request, reply, 'payment', {
+
+    // Recorded before the call, not after: a decline, a 3DS step-up and a
+    // provider timeout all leave the traveller on the payment screen, and all
+    // three are abandonment at `payment` if they never come back.
+    const bookingId = String((request.body as Record<string, unknown>)?.bookingId ?? '');
+    if (bookingId) await advanceCart(deps, bookingId, 'payment');
+
+    const body = await forward(request, reply, 'payment', {
       method: 'POST',
       path: '/v1/payments/authorize',
       body: request.body,
       headers: { 'idempotency-key': key },
       timeoutMs: PAYMENT_TIMEOUT_MS,
     });
+    await closeSettledCart(deps, body);
+    return body;
   });
 
   app.post('/api/v1/payments/:id/3ds/complete', async (request, reply) => {
     const { id } = request.params as { id: string };
-    return forward(request, reply, 'payment', {
+    const body = await forward(request, reply, 'payment', {
       method: 'POST',
       path: `/v1/payments/${encodeURIComponent(id)}/3ds/complete`,
       body: request.body ?? {},
       timeoutMs: PAYMENT_TIMEOUT_MS,
     });
+    await closeSettledCart(deps, body);
+    return body;
   });
 
   app.get('/api/v1/payments/:id', async (request, reply) => {
@@ -249,6 +270,20 @@ type ForwardOptions = {
   headers?: Record<string, string>;
   timeoutMs?: number;
 };
+
+/**
+ * Stop tracking a cart whose payment has settled.
+ *
+ * Read from the payment-service response rather than from the request, because
+ * a 3DS completion only names the payment and the booking id comes back with
+ * it.
+ */
+async function closeSettledCart(deps: Deps, body: unknown): Promise<void> {
+  const payment = body as { bookingId?: string; state?: string } | null;
+  if (!payment?.bookingId || !payment.state) return;
+  if (!SETTLED_PAYMENT_STATES.has(payment.state)) return;
+  await closeCart(deps, payment.bookingId);
+}
 
 async function forward(
   request: FastifyRequest,

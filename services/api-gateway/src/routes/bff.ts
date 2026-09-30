@@ -11,6 +11,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import { principalOf, requirePrincipal } from '../auth';
+import { openCart } from '../cart';
 import { ValidationError } from '../errors';
 import { callService, gather } from '../http';
 import type { Deps } from '../deps';
@@ -133,6 +134,15 @@ export function registerBffRoutes(app: FastifyInstance, deps: Deps): void {
       requestId: request.id,
       timeoutMs: CHECKOUT_TIMEOUT_MS,
     });
+
+    // The traveller is now on /checkout/review with a live hold. Tracked so
+    // `voyager.cart.abandoned` can say where they stopped if they never pay.
+    await openCart(
+      deps,
+      bookingId,
+      String(held.body.productType ?? 'unknown'),
+      held.body.holdExpiresAt as string | null,
+    );
 
     // 5. Points preview, which is decoration. It never blocks a checkout.
     let pointsPreview: unknown = null;
@@ -319,7 +329,7 @@ function priceRequest(
     productType: 'flights',
     origin: segment.origin,
     destination: segment.destination,
-    departDate: String(segment.departureTime ?? '').slice(0, 10),
+    departDate: String(segment.departAt ?? '').slice(0, 10),
     returnDate: body.returnDate ?? undefined,
     fareClass: fare.basis,
     cabin: fare.cabin,

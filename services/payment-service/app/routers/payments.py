@@ -9,7 +9,7 @@ import structlog
 from fastapi import APIRouter, Header, Response
 from pydantic import BaseModel, Field
 
-from app import clients, db, tracing
+from app import clients, db, metrics, tracing
 from app.config import get_settings
 from app.domain.states import PaymentState, Trigger
 from app.errors import (
@@ -93,8 +93,8 @@ async def authorize(
             session, key=idempotency_key, endpoint=endpoint, request_hash=request_hash
         )
     if replay is not None:
-        # A replay is a success, not a second charge. The counter that tracks
-        # these becomes a metric in Phase 8.
+        # A replay is a success, not a second charge.
+        metrics.idempotency_replay(endpoint)
         log.info(
             "Idempotent replay served",
             payment={"idempotency_key": idempotency_key},
@@ -401,12 +401,20 @@ async def _apply_provider_result(payment: dict, provider: dict) -> dict:
             provider_payload=_redacted(provider),
         )
 
+    # Only a state that actually moved reaches here -- the early return above
+    # covers the webhook arriving after the synchronous answer had already
+    # settled the payment, and counting that too would double every
+    # authorization. A 3DS step-up is neither outcome yet and is counted when it
+    # resolves, which is this same function, one request later.
     if updated["state"] == PaymentState.DECLINED:
+        metrics.declined(updated)
         log.warning(
             "Payment declined",
             payment={**_log_fields(updated), "decline_code": updated["decline_code"]},
         )
     else:
+        if updated["state"] in (PaymentState.AUTHORIZED, PaymentState.CAPTURED):
+            metrics.authorized(updated)
         log.info("Payment authorized", payment=_log_fields(updated))
     return updated
 
@@ -421,6 +429,7 @@ async def _record_provider_error(payment: dict, exc: PaymentProviderError) -> di
             failure_message=exc.message,
             provider_payload=exc.details,
         )
+    metrics.errored(exc.type, provider=updated.get("provider"))
     log.error(
         "Payment provider failed",
         error={"kind": exc.type, "message": exc.message},

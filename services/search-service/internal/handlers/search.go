@@ -3,12 +3,14 @@ package handlers
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/rs/zerolog"
 
 	"voyager/search-service/internal/apierr"
 	"voyager/search-service/internal/gds"
+	"voyager/search-service/internal/metrics"
 	"voyager/search-service/internal/pricing"
 	"voyager/search-service/internal/store"
 	"voyager/search-service/internal/tracing"
@@ -62,6 +64,7 @@ func (s *Server) runFlightSearch(ctx context.Context, criteria store.Criteria) (
 		responded++
 		raw = append(raw, outcome.Flights...)
 	}
+	recordFanOut(outcomes, responded)
 
 	// Partial results are fine; no results at all are not.
 	if responded == 0 {
@@ -75,6 +78,7 @@ func (s *Server) runFlightSearch(ctx context.Context, criteria store.Criteria) (
 	tracing.Span(ctx, "search.normalize_results", func(context.Context) {
 		results = gds.DedupeFlights(raw)
 		results = store.FilterFlights(results, criteria.Filters)
+		store.FinalizeFlights(results)
 
 		// One batch, so the pricing call stays a single span with a bounded
 		// payload. Beyond this the extra results would never be looked at.
@@ -138,6 +142,7 @@ func (s *Server) runHotelSearch(ctx context.Context, criteria store.Criteria) (*
 		responded++
 		raw = append(raw, outcome.Hotels...)
 	}
+	recordFanOut(outcomes, responded)
 
 	if responded == 0 {
 		return nil, apierr.GdsUnavailable(errors.New("every provider failed"))
@@ -146,8 +151,20 @@ func (s *Server) runHotelSearch(ctx context.Context, criteria store.Criteria) (*
 	var results []store.HotelResult
 	tracing.Span(ctx, "search.normalize_results", func(context.Context) {
 		results = store.FilterHotels(gds.DedupeHotels(raw), criteria.Filters)
-		store.SortHotels(results, criteria.Sort)
+		store.FinalizeHotels(results, criteria.City,
+			store.Nights(criteria.CheckIn, criteria.CheckOut))
+
+		if len(results) > pricing.MaxBatchSize {
+			store.SortHotels(results, store.DefaultSort)
+			results = results[:pricing.MaxBatchSize]
+		}
 	})
+
+	if err := s.priceHotels(ctx, criteria, results); err != nil {
+		return nil, err
+	}
+
+	store.SortHotels(results, criteria.Sort)
 
 	set := &store.ResultSet{
 		SearchID:           store.NewSearchID(),
@@ -163,8 +180,92 @@ func (s *Server) runHotelSearch(ctx context.Context, criteria store.Criteria) (*
 	return &Outcome{Set: set}, nil
 }
 
+// recordFanOut reports what each provider contributed to one fan-out
+// (05-FUNCTIONALITY.md § 14).
+//
+// Latency is recorded in milliseconds for failures as well as successes. A
+// provider that times out spent the whole three-second budget, and dropping
+// those observations is what would make a provider look fastest at the moment
+// it stopped answering -- the opposite of what `gds_provider_down` exists to
+// show.
+//
+// Partial results are counted only when at least one provider answered. Nobody
+// answering is not a degraded search, it is a failed one, and it leaves as an
+// error on the request span instead.
+func recordFanOut(outcomes []gds.ProviderOutcome, responded int) {
+	for _, outcome := range outcomes {
+		metrics.Distribution(metrics.ProviderLatency,
+			float64(outcome.Duration.Milliseconds()),
+			"provider:"+outcome.Provider)
+
+		if outcome.Err != nil {
+			metrics.Count(metrics.ProviderErrors,
+				"provider:"+outcome.Provider,
+				"error_kind:"+metrics.ProviderErrorKind(outcome.Err))
+		}
+	}
+
+	if responded > 0 && responded < len(outcomes) {
+		metrics.Count(metrics.PartialResults,
+			"providers_responded:"+strconv.Itoa(responded))
+	}
+}
+
 // priceFlights replaces the provider's own numbers with pricing-service's.
 // The results are mutated in place.
+// priceHotels is the hotel equivalent of priceFlights.
+//
+// The providers quote a room rate and stop there; tax belongs to
+// pricing-service (05-FUNCTIONALITY.md § 7), so without this a stay costs the
+// same gross as net and the results page has no taxes line to show. It also
+// gives the hotel path the `search.price_results` span the flight path
+// already has, so the two searches look alike in a trace.
+func (s *Server) priceHotels(ctx context.Context, criteria store.Criteria, results []store.HotelResult) *apierr.Error {
+	if len(results) == 0 {
+		return nil
+	}
+
+	offers := make([]pricing.Offer, 0, len(results))
+	for _, result := range results {
+		offers = append(offers, pricing.Offer{
+			ID:          result.ID,
+			ProductType: string(store.Hotels),
+			Destination: criteria.City,
+			DepartDate:  criteria.CheckIn,
+			// A rate plan is the hotel's fare class: it is what the rules
+			// engine matches on, and it is the only per-offer discriminator a
+			// hotel has.
+			FareClass: result.RatePlanName,
+			Cabin:     "",
+			BaseCents: result.TotalCents,
+			Currency:  result.Currency,
+		})
+	}
+
+	quotes, err := s.pricing.Batch(ctx, offers)
+	if err != nil {
+		return apierr.PricingUnavailable(err)
+	}
+
+	for index := range results {
+		quote, ok := quotes[results[index].ID]
+		if !ok {
+			continue
+		}
+		results[index].TaxesCents = quote.TaxesCents
+		results[index].TotalCents = quote.TotalCents
+		// LeadCents is what the price sort reads. Leaving it at the net figure
+		// would sort the list by a number the page never displays.
+		results[index].LeadCents = quote.TotalCents
+		if nights := results[index].Nights; nights > 0 {
+			// Re-derive so that nightly x nights + taxes adds up to the total
+			// on the card. Adjustments apply to the stay, not to one night.
+			results[index].NightlyCents = (quote.TotalCents - quote.TaxesCents) / int64(nights)
+		}
+	}
+	return nil
+}
+
 func (s *Server) priceFlights(ctx context.Context, criteria store.Criteria, results []store.FlightResult) *apierr.Error {
 	if len(results) == 0 {
 		return nil

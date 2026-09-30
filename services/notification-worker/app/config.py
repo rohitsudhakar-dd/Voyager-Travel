@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     dd_version: str = "dev"
     log_level: str = "INFO"
 
+    # DogStatsD. The Agent's container name, not localhost: the socket is on
+    # another container, and a client pointed at localhost reports nothing at
+    # all with no error to say so.
+    dd_dogstatsd_host: str = "datadog-agent"
+    dd_dogstatsd_port: int = 8125
+
     # Dependencies
     redis_url: str = "redis://redis:6379"
     kafka_brokers: str = "kafka:9092"

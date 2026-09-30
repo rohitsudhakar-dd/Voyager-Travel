@@ -50,6 +50,12 @@ apm_config:
 
 dogstatsd_non_local_traffic: true
 dogstatsd_port: 8125
+# Makes `agent dogstatsd-stats` list the metrics actually received, by name and
+# tag set. That command is the only way to prove a custom metric left a service
+# and arrived here without a valid application key to query the API with, so
+# scripts/verify-metrics.sh depends on it. The cost is a bounded in-memory
+# counter per metric name, which for Voyager's thirty is nothing.
+dogstatsd_metrics_stats_enable: true
 
 process_config:
   process_collection:

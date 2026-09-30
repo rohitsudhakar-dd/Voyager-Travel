@@ -20,6 +20,7 @@ import (
 	"voyager/search-service/internal/config"
 	"voyager/search-service/internal/gds"
 	"voyager/search-service/internal/httpx"
+	"voyager/search-service/internal/metrics"
 	"voyager/search-service/internal/pricing"
 	"voyager/search-service/internal/store"
 	"voyager/search-service/internal/tracing"
@@ -175,6 +176,7 @@ func (s *Server) searchFlights(w http.ResponseWriter, r *http.Request) {
 
 	start, end := store.Page(len(outcome.Set.Flights), 1, defaultPageSize)
 	s.logSearch(r, outcome, criteria)
+	recordSearch(criteria, outcome)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"searchId":           outcome.Set.SearchID,
 		"cacheHit":           outcome.CacheHit,
@@ -211,6 +213,7 @@ func (s *Server) searchHotels(w http.ResponseWriter, r *http.Request) {
 
 	start, end := store.Page(len(outcome.Set.Hotels), 1, defaultPageSize)
 	s.logSearch(r, outcome, criteria)
+	recordSearch(criteria, outcome)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"searchId":           outcome.Set.SearchID,
 		"cacheHit":           outcome.CacheHit,
@@ -452,6 +455,36 @@ func cancellationPolicy(flight store.FlightResult) map[string]any {
 		"feeCents":       0,
 		"description":    "This fare is non-refundable. Taxes are returned if you cancel.",
 	}
+}
+
+// recordSearch counts one served search (05-FUNCTIONALITY.md § 14).
+//
+// Only searches that answered. The cache-hit ratio on dashboard D1 is
+// voyager.search.requests{cache_hit:true} over the whole of the metric, and
+// counting failures would quietly move that ratio for a reason that has nothing
+// to do with the cache.
+//
+// origin, destination and cabin are omitted for hotels, the same way the span
+// tags are: "group by origin" is only useful if every point it returns has an
+// origin, and one empty bucket the size of the hotel traffic would drown the
+// routes that matter. They stay three tags rather than one -- § 14's
+// cardinality rule -- because 500 origins times 500 destinations is 250,000
+// series and a bill to match.
+func recordSearch(criteria store.Criteria, outcome *Outcome) {
+	product := "product:" + string(criteria.ProductType)
+	cacheHit := "cache_hit:" + strconv.FormatBool(outcome.CacheHit)
+
+	tags := []string{product, cacheHit}
+	if criteria.ProductType == store.Flights {
+		tags = append(tags,
+			"origin:"+criteria.Origin,
+			"destination:"+criteria.Destination,
+			"cabin:"+criteria.Cabin)
+	}
+
+	metrics.Count(metrics.Requests, tags...)
+	metrics.Distribution(metrics.ResultsCount,
+		float64(outcome.Set.Count()), product, cacheHit)
 }
 
 func (s *Server) logSearch(r *http.Request, outcome *Outcome, criteria store.Criteria) {

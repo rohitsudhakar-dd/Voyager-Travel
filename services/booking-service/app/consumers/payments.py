@@ -13,7 +13,7 @@ import json
 import structlog
 from aiokafka import AIOKafkaConsumer
 
-from app import db, kafka_context, tracing
+from app import db, kafka_context, metrics, tracing
 from app.domain.states import BookingState, Trigger
 from app.errors import InvalidBookingTransitionError
 from app.kafka import envelope
@@ -122,6 +122,7 @@ async def confirm(booking_id: str, *, correlation_id: str = "") -> dict:
     # request span; consumed from Kafka there is no span left to carry it,
     # because ddtrace 2.14 has no aiokafka integration to open one.
     tracing.tag_booking(booking)
+    metrics.booking_confirmed(booking)
 
     if runtime.chaos.is_enabled("booking_memory_leak"):
         # Retained forever, keyed per booking, reachable from a module-level
@@ -195,6 +196,14 @@ async def fail(booking_id: str, payload: dict, *, correlation_id: str = "") -> d
             },
         },
         correlation_id=correlation_id,
+    )
+    # `reason` is payment-service's own word for what happened -- "declined" or
+    # "provider_error" -- and it is used verbatim. A decline code here instead
+    # would answer the same question payment-service's own metric already
+    # answers, and this one is about the booking, not the card.
+    metrics.booking_failed(
+        product=booking["product_type"],
+        failure_reason=payload.get("reason") or "unknown",
     )
     log.warning(
         "Booking payment failed",

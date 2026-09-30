@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -17,6 +18,7 @@ import (
 	"voyager/pricing-service/internal/chaos"
 	"voyager/pricing-service/internal/config"
 	"voyager/pricing-service/internal/httpx"
+	"voyager/pricing-service/internal/metrics"
 	"voyager/pricing-service/internal/rules"
 	"voyager/pricing-service/internal/tracing"
 )
@@ -214,9 +216,16 @@ func (s *Server) evaluate(ctx context.Context, requests []offerRequest) ([]rules
 		})
 	}
 
+	// Per offer rather than per batch: the point of the metric is how much rule
+	// work one fare costs, and a batch sum would move with the batch size --
+	// which search-service chooses -- rather than with the rule set.
+	hotPathTag := "hot_path:" + strconv.FormatBool(hotPath)
 	tracing.Span(ctx, "pricing.evaluate_fare_rules", func(context.Context) {
 		for _, offer := range offers {
-			quotes = append(quotes, index.Evaluate(offer, now, hotPath))
+			quote := index.Evaluate(offer, now, hotPath)
+			metrics.Distribution(metrics.RulesEvaluated,
+				float64(quote.RulesEvaluated), hotPathTag)
+			quotes = append(quotes, quote)
 		}
 	})
 	tracing.Span(ctx, "pricing.apply_taxes", func(context.Context) {

@@ -20,6 +20,7 @@ from aiokafka.structs import ConsumerRecord
 
 from app import config as topics
 from app import kafka_context
+from app import metrics
 from app.chaos import Chaos
 from app.config import Settings
 from app.delivery import Deliverer, Outcome
@@ -189,6 +190,7 @@ class NotificationConsumer:
             await self._dead_letter(record, outcome)
 
         self._log_outcome(record, outcome)
+        self._record_metrics(record, outcome)
 
     async def _dead_letter(self, record: ConsumerRecord, outcome: Outcome) -> None:
         assert self._producer is not None
@@ -212,6 +214,24 @@ class NotificationConsumer:
             value=json.dumps(payload).encode("utf-8"),
             headers=kafka_context.produce_headers(topics.DLQ_TOPIC),
         )
+
+    def _record_metrics(self, record: ConsumerRecord, outcome: Outcome) -> None:
+        """The § 14 metrics for one handled message.
+
+        The lag gauge is reported on every message, including the ones that need
+        no email: it is a property of the consumer group's position, not of what
+        the message turned out to be, and reporting it only for delivered mail
+        would make the gauge go quiet exactly when a flood of unroutable events
+        is what put the group behind.
+        """
+        metrics.lag_seconds(
+            produced_at_ms=record.timestamp, consumer_group=topics.CONSUMER_GROUP
+        )
+
+        if outcome.kind == "sent":
+            metrics.sent(outcome.template)
+        elif outcome.kind == "dead_lettered":
+            metrics.dead_lettered(outcome.template, outcome.failure_reason)
 
     def _log_outcome(self, record: ConsumerRecord, outcome: Outcome) -> None:
         fields = {

@@ -18,6 +18,7 @@ import (
 	"voyager/search-service/internal/config"
 	"voyager/search-service/internal/handlers"
 	"voyager/search-service/internal/logging"
+	"voyager/search-service/internal/metrics"
 	"voyager/search-service/internal/tracing"
 )
 
@@ -29,6 +30,11 @@ func main() {
 	// retroactively, so anything built above this line is invisible.
 	stopTracing := tracing.Start(cfg.Service, cfg.Env, cfg.Version)
 	defer stopTracing()
+
+	// Deferred rather than left to process exit: DogStatsD is UDP, so anything
+	// still in the client's buffer when the process ends is simply lost.
+	stopMetrics := metrics.Start()
+	defer stopMetrics()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

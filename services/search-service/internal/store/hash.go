@@ -19,6 +19,7 @@ import (
 // rather than re-querying four providers.
 func CacheKey(c Criteria) string {
 	parts := []string{
+		payloadVersion,
 		string(c.ProductType),
 		c.Origin,
 		c.Destination,
@@ -38,6 +39,18 @@ func CacheKey(c Criteria) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return "search:" + string(c.ProductType) + "s:" + hex.EncodeToString(sum[:])[:16]
 }
+
+// payloadVersion is part of every key so that a release which changes the
+// shape of a stored result cannot serve the previous shape.
+//
+// A cached set is JSON, and Go fills a field it cannot find with the zero
+// value rather than an error. Renaming a field therefore does not produce a
+// miss or a failure: it produces a complete-looking result in which every
+// renamed field is empty -- a price of 0, a departure of year 1 -- which the
+// browser then rejects against its schema, leaving an empty results page and
+// nothing anywhere to say why. Bump this whenever a json tag in result.go
+// changes.
+const payloadVersion = "v3"
 
 func canonicalFilters(f Filters) string {
 	parts := make([]string, 0, 5)

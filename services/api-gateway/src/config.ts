@@ -25,6 +25,14 @@ export const config = {
 
   redisUrl: process.env.REDIS_URL ?? 'redis://redis:6379',
 
+  dogstatsd: {
+    // The Agent's container name, not localhost: the socket is on another
+    // container, and a client pointed at localhost reports nothing at all with
+    // no error to say so.
+    host: process.env.DD_DOGSTATSD_HOST ?? process.env.DD_AGENT_HOST ?? 'datadog-agent',
+    port: int('DD_DOGSTATSD_PORT', 8125),
+  },
+
   postgres: {
     host: process.env.POSTGRES_HOST ?? 'postgres',
     port: int('POSTGRES_PORT', 5432),

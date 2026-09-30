@@ -21,6 +21,7 @@
     "bcryptjs": "2.4.3",
     "dd-trace": "5.23.0",
     "fastify": "4.28.1",
+    "hot-shots": "10.0.0",
     "ioredis": "5.4.1",
     "jsonwebtoken": "9.0.2",
     "pg": "8.13.0",

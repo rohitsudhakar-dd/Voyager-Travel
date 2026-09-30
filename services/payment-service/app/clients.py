@@ -7,12 +7,13 @@ provider is a `PaymentProviderError` (our problem, an ERROR state), while a
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import httpx
 from ddtrace import tracer
 
-from app import tracing
+from app import metrics, tracing
 from app.config import get_settings
 from app.errors import PaymentProviderError
 
@@ -66,7 +67,9 @@ async def charge(
     # this hop naming the fault the same way.
     span = tracer.trace("payment.authorize")
     try:
-        return await _post(f"{settings.payments_base_url}/v1/charges", body)
+        return await _post(
+            f"{settings.payments_base_url}/v1/charges", body, operation="authorize"
+        )
     except PaymentProviderError as exc:
         tracing.record_error(exc.type, exc.message, exc, span=span)
         raise
@@ -78,7 +81,9 @@ async def capture(reference: str, amount_cents: int | None = None) -> dict[str, 
     settings = get_settings()
     body = {} if amount_cents is None else {"amount": amount_cents}
     return await _post(
-        f"{settings.payments_base_url}/v1/charges/{reference}/capture", body
+        f"{settings.payments_base_url}/v1/charges/{reference}/capture",
+        body,
+        operation="capture",
     )
 
 
@@ -87,6 +92,7 @@ async def refund(reference: str, amount_cents: int) -> dict[str, Any]:
     return await _post(
         f"{settings.payments_base_url}/v1/charges/{reference}/refund",
         {"amount": amount_cents},
+        operation="refund",
     )
 
 
@@ -95,17 +101,29 @@ async def complete_3ds(reference: str, *, success: bool) -> dict[str, Any]:
     return await _post(
         f"{settings.payments_base_url}/v1/charges/{reference}/3ds/complete",
         {"success": success},
+        operation="3ds_complete",
     )
 
 
-async def _post(url: str, body: dict[str, Any]) -> dict[str, Any]:
+async def _post(url: str, body: dict[str, Any], *, operation: str) -> dict[str, Any]:
+    # `operation` is passed in rather than parsed back out of the URL: the URL
+    # carries a charge reference, and a tag derived from it would be one time
+    # series per payment.
+    started = time.perf_counter()
     try:
         response = await client().post(url, json=body)
     except httpx.HTTPError as exc:
+        metrics.provider_latency_ms(
+            (time.perf_counter() - started) * 1000, operation=operation
+        )
         raise PaymentProviderError(
             "The payment provider could not be reached.",
             details={"reason": type(exc).__name__},
         ) from exc
+
+    metrics.provider_latency_ms(
+        (time.perf_counter() - started) * 1000, operation=operation
+    )
 
     if response.status_code >= 500:
         raise PaymentProviderError(

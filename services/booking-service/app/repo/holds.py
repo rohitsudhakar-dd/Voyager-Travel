@@ -8,12 +8,14 @@ travellers reaching for the last seat serialise rather than both getting it.
 from __future__ import annotations
 
 import asyncio
+import time
 from uuid import UUID, uuid4
 
 from ddtrace import tracer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import metrics
 from app.errors import InventoryUnavailableError
 
 # How long the widened critical section holds the lock. Long enough to queue
@@ -52,7 +54,15 @@ async def acquire(
     expires_at,
     widen_critical_section: bool = False,
 ) -> dict:
+    # Timed here rather than around the whole of `acquire`: what
+    # `hold_lock_contention` produces is a wait for the lock, and folding the
+    # availability read and the two writes into the same number would leave the
+    # metric moving whenever Postgres was busy for any other reason.
+    lock_started = time.perf_counter()
     await _acquire_advisory_lock(db, resource_type, resource_id)
+    metrics.hold_lock_wait_ms(
+        (time.perf_counter() - lock_started) * 1000, resource_type
+    )
 
     if widen_critical_section:
         # The lock is already held, so every other hold on this seat waits
@@ -116,6 +126,7 @@ async def acquire(
                 "expires_at": expires_at,
             },
         )
+    metrics.hold_created(resource_type)
     return {
         "id": str(hold_id),
         "resourceType": resource_type,
@@ -163,6 +174,11 @@ async def release(db: AsyncSession, booking_id: str, *, state: str) -> int:
             text(f"UPDATE {table} SET {column} = {column} + :quantity WHERE id = :id"),
             {"id": row.resource_id, "quantity": row.quantity},
         )
+        # Only the sweeper's release is an expiry. A cancellation releases the
+        # same rows and is a traveller's decision, not a hold running out, and
+        # counting both would make the expiry rate meaningless.
+        if state == "expired":
+            metrics.hold_expired(row.resource_type)
     return len(rows)
 
 

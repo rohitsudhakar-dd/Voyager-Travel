@@ -17,6 +17,7 @@
   "dependencies": {
     "dd-trace": "5.23.0",
     "fastify": "4.28.1",
+    "hot-shots": "10.0.0",
     "ioredis": "5.4.1",
     "kafkajs": "2.2.4",
     "pg": "8.13.0",

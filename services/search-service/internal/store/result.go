@@ -22,18 +22,26 @@ const (
 )
 
 type Airline struct {
-	Code string `json:"code"`
+	Code string `json:"iataCode"`
 	Name string `json:"name"`
+	// LogoSeed picks one of the generated crest designs. Voyager invents every
+	// airline, so there is no real mark to fetch and the seed has to be stable
+	// across searches or the same carrier changes logo as you page.
+	LogoSeed int `json:"logoSeed"`
 }
 
 type Segment struct {
-	FlightID        string    `json:"flightId"`
-	FlightNumber    string    `json:"flightNumber"`
+	FlightID     string `json:"flightId"`
+	FlightNumber string `json:"flightNumber"`
+	// AirlineCode repeats the result's carrier on every segment. A codeshare
+	// leg is operated by someone other than the airline that sold the ticket,
+	// and the segment list is the only place that can say so.
+	AirlineCode     string    `json:"airlineCode"`
 	Origin          string    `json:"origin"`
 	Destination     string    `json:"destination"`
-	DepartureTime   time.Time `json:"departureTime"`
-	ArrivalTime     time.Time `json:"arrivalTime"`
-	Aircraft        string    `json:"aircraft,omitempty"`
+	DepartureTime   time.Time `json:"departAt"`
+	ArrivalTime     time.Time `json:"arriveAt"`
+	Aircraft        string    `json:"aircraftType"`
 	DurationMinutes int       `json:"durationMinutes"`
 }
 
@@ -47,21 +55,25 @@ type AppliedRule struct {
 }
 
 type Fare struct {
-	Basis            string        `json:"basis"`
+	Basis            string        `json:"fareClassCode"`
 	Cabin            string        `json:"cabin"`
-	BaseAmountCents  int64         `json:"baseAmountCents"`
+	BaseAmountCents  int64         `json:"baseCents"`
 	AdjustmentsCents int64         `json:"adjustmentsCents"`
 	TaxesCents       int64         `json:"taxesCents"`
-	TotalAmountCents int64         `json:"totalAmountCents"`
+	TotalAmountCents int64         `json:"totalCents"`
 	Currency         string        `json:"currency"`
 	Refundable       bool          `json:"refundable"`
 	Changeable       bool          `json:"changeable"`
-	BaggageAllowance int           `json:"baggageAllowance"`
-	AppliedRules     []AppliedRule `json:"appliedRules,omitempty"`
+	BaggageAllowance int           `json:"baggageIncluded"`
+	// Duplicated from the result so the fare card has everything it renders in
+	// one object; the seat count is what turns "£412" into "£412, 2 left".
+	SeatsRemaining int           `json:"seatsRemaining"`
+	AppliedRules   []AppliedRule `json:"appliedRules,omitempty"`
 }
 
 type FlightResult struct {
-	ID string `json:"id"`
+	ID          string      `json:"id"`
+	ProductType ProductType `json:"productType"`
 	// Provider and OfferID are what checkout re-verifies against, so they
 	// have to survive normalisation.
 	Provider        string    `json:"provider"`
@@ -91,13 +103,17 @@ type HotelRate struct {
 
 type HotelResult struct {
 	ID           string      `json:"id"`
+	ProductType  ProductType `json:"productType"`
 	Provider     string      `json:"provider"`
 	PropertyID   string      `json:"propertyId"`
 	Name         string      `json:"name"`
 	StarRating   int         `json:"starRating"`
 	ReviewScore  float64     `json:"reviewScore"`
 	ReviewCount  int         `json:"reviewCount"`
-	Neighborhood string      `json:"neighborhood,omitempty"`
+	CityName     string      `json:"cityName"`
+	// No omitempty: the client's schema wants the key present and either a
+	// string or null, and an omitted key is neither.
+	Neighborhood string      `json:"neighborhood"`
 	Address      string      `json:"address,omitempty"`
 	Latitude     float64     `json:"latitude,omitempty"`
 	Longitude    float64     `json:"longitude,omitempty"`
@@ -106,6 +122,20 @@ type HotelResult struct {
 	Rates        []HotelRate `json:"rates"`
 	LeadCents    int64       `json:"leadPriceCents"`
 	Currency     string      `json:"currency"`
+
+	// The lead rate, repeated flat. A result card shows one price and one room,
+	// and reaching into rates[0] to find them would make every consumer repeat
+	// the "cheapest rate wins" rule that Finalize already applies once here.
+	// The full list stays in Rates for the property page.
+	RoomName          string `json:"roomName"`
+	RatePlanName      string `json:"ratePlanName"`
+	BreakfastIncluded bool   `json:"breakfastIncluded"`
+	Refundable        bool   `json:"refundable"`
+	RoomsAvailable    int    `json:"roomsAvailable"`
+	Nights            int    `json:"nights"`
+	NightlyCents      int64  `json:"nightlyPriceCents"`
+	TaxesCents        int64  `json:"taxesCents"`
+	TotalCents        int64  `json:"totalCents"`
 }
 
 // Criteria is the normalised request. It is stored with the result set so a
@@ -159,6 +189,107 @@ func (rs *ResultSet) Count() int {
 func ResultID(prefix, providerOfferID string) string {
 	sum := sha256.Sum256([]byte(providerOfferID))
 	return prefix + "_" + hex.EncodeToString(sum[:])[:16]
+}
+
+// FinalizeFlights fills the fields the client contract requires but no
+// provider sends.
+//
+// They are derived here, once, rather than in each of the two normalisers:
+// the providers disagree about almost everything else, but none of them has
+// an opinion about these. A missing one is not a cosmetic problem -- the
+// browser parses this payload against a schema, so one absent field rejects
+// the whole result set and the results page renders nothing at all.
+func FinalizeFlights(results []FlightResult) {
+	for i := range results {
+		results[i].ProductType = Flights
+		results[i].Airline.LogoSeed = logoSeed(results[i].Airline.Code)
+		results[i].Fare.SeatsRemaining = results[i].SeatsRemaining
+		for j := range results[i].Segments {
+			// Only where the provider did not name an operating carrier. A
+			// codeshare leg that says so must keep saying so.
+			if results[i].Segments[j].AirlineCode == "" {
+				results[i].Segments[j].AirlineCode = results[i].Airline.Code
+			}
+		}
+	}
+}
+
+// FinalizeHotels is the hotel half of the same contract.
+//
+// It also flattens the cheapest rate onto the result. Providers return every
+// rate plan for a property, but a search result shows one price, and which one
+// that is has to be decided somewhere. Deciding it here means the sort, the
+// card, and the pricing call all agree about which rate they are talking
+// about.
+//
+// Money is deliberately left pre-tax: pricing-service owns tax
+// (05-FUNCTIONALITY.md § 7), and priceHotels overwrites these three fields
+// with its answer a moment later.
+func FinalizeHotels(results []HotelResult, cityName string, nights int) {
+	for i := range results {
+		results[i].ProductType = Hotels
+		results[i].CityName = cityName
+		results[i].Nights = nights
+
+		lead, ok := cheapestRate(results[i].Rates)
+		if !ok {
+			continue
+		}
+		results[i].RoomName = lead.RoomName
+		results[i].RatePlanName = lead.RateName
+		results[i].BreakfastIncluded = lead.BreakfastIncluded
+		results[i].Refundable = lead.Refundable
+		results[i].RoomsAvailable = lead.RoomsAvailable
+		results[i].NightlyCents = lead.NightlyCents
+		results[i].TotalCents = lead.TotalCents
+		results[i].Currency = lead.Currency
+	}
+}
+
+// cheapestRate picks the rate a result is sold at. Ties go to the earlier
+// rate so that the same property does not swap rooms between two searches
+// that returned the same rates in the same order.
+func cheapestRate(rates []HotelRate) (HotelRate, bool) {
+	best := -1
+	for i := range rates {
+		if best == -1 || rates[i].TotalCents < rates[best].TotalCents {
+			best = i
+		}
+	}
+	if best == -1 {
+		return HotelRate{}, false
+	}
+	return rates[best], true
+}
+
+// Nights counts the nights in a stay. Zero when either date is missing or the
+// pair is the wrong way round, which the request schema already rejects.
+func Nights(checkIn, checkOut string) int {
+	const layout = "2006-01-02"
+	start, err := time.Parse(layout, checkIn)
+	if err != nil {
+		return 0
+	}
+	end, err := time.Parse(layout, checkOut)
+	if err != nil {
+		return 0
+	}
+	if nights := int(end.Sub(start).Hours() / 24); nights > 0 {
+		return nights
+	}
+	return 0
+}
+
+// logoSeed maps a carrier code onto one of the generated crest designs. FNV-1a
+// rather than the raw bytes so that ZP and PZ do not collide onto one design.
+func logoSeed(code string) int {
+	const offset, prime = 2166136261, 16777619
+	hash := uint32(offset)
+	for i := 0; i < len(code); i++ {
+		hash ^= uint32(code[i])
+		hash *= prime
+	}
+	return int(hash % 1000)
 }
 
 // ---------------------------------------------------------------- sorting --
