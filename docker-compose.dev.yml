@@ -1,21 +1,35 @@
-# Local-development overlay: publishes the data layer to the host so psql,
-# redis-cli and kafka tooling work from a terminal.
+# Local-development overlay: publishes the data layer and every service to the
+# host so psql, redis-cli, kafka tooling and the scripts/verify-*.sh suite work
+# from a terminal.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 #
-# Never apply this overlay on the EC2 host. The security group assumes only
-# Caddy is reachable (02-TECH-STACK.md § 9).
+# This overlay must never be applied on a deployed host. The EC2 security group
+# opens 80 and 443 only, and that is the whole of Voyager's network posture
+# (02-TECH-STACK.md § 9) -- an operator who reaches for this file on the server
+# because a verify script would not connect has moved 5432 and 6379 onto the
+# host's interfaces and will not notice.
+#
+# So it refuses to load unless VOYAGER_DEV_BIND_ADDR is set. `make bootstrap`
+# sets it to 127.0.0.1 when it creates .env, because running `make bootstrap`
+# is the point at which someone asserts they are on a workstation.
+# infra/ec2/userdata.sh copies .env.example verbatim instead, where the value
+# is empty, and infra/ec2/deploy.sh refuses to deploy if it is not.
+#
+# The address is a variable rather than a literal for the same reason: 0.0.0.0
+# is one character away from 127.0.0.1 in a file nobody reviews, and on a
+# deployed host that one character is the whole exposure.
 
 name: voyager
 
 services:
   postgres:
     ports:
-      - "127.0.0.1:5432:5432"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:5432:5432"
 
   redis:
     ports:
-      - "127.0.0.1:6379:6379"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:6379:6379"
 
   kafka:
     # Clients on the host resolve `localhost:19092`; clients inside the
@@ -26,63 +40,66 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:19092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
     ports:
-      - "127.0.0.1:19092:19092"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:19092:19092"
 
-  # Reaching the SPA without going through Caddy, which on `localhost` redirects
-  # to HTTPS and presents a certificate from its own CA. This origin is also the
-  # only one that is genuinely cross-origin to the gateway, so it is what the
-  # browser RUM tracing headers and the gateway CORS config are exercised against.
+  # Published so a browser can reach the storefront without going through the
+  # edge. On `localhost` Caddy redirects to HTTPS and signs with its own CA,
+  # which no host browser trusts, so every RUM check against the front door
+  # starts behind a certificate interstitial. This port is the plain-HTTP way
+  # in, and it is also the one origin that is genuinely cross-origin to the
+  # gateway -- which is the case `allowedTracingUrls` and the gateway's CORS
+  # preflight have to get right, and the case the edge hides.
   web-ui:
     ports:
-      - "127.0.0.1:8080:8080"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:8080:8080"
 
   api-gateway:
     ports:
-      - "127.0.0.1:4000:4000"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:4000:4000"
 
   search-service:
     ports:
-      - "127.0.0.1:4010:4010"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:4010:4010"
 
   pricing-service:
     ports:
-      - "127.0.0.1:4020:4020"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:4020:4020"
 
   booking-service:
     ports:
-      - "127.0.0.1:4030:4030"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:4030:4030"
 
   payment-service:
     ports:
-      - "127.0.0.1:4040:4040"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:4040:4040"
 
   loyalty-service:
     ports:
-      - "127.0.0.1:4050:4050"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:4050:4050"
 
   # Health only; notification-worker's real interface is the consumer group.
   notification-worker:
     ports:
-      - "127.0.0.1:4060:4060"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:4060:4060"
 
   ai-support-service:
     ports:
-      - "127.0.0.1:4070:4070"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:4070:4070"
 
   # The mocks are published so you can curl a provider directly while
   # debugging, without going through search-service.
   mock-gds:
     ports:
-      - "127.0.0.1:4900:4900"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:4900:4900"
 
   mock-payments:
     ports:
-      - "127.0.0.1:4910:4910"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:4910:4910"
 
   mock-email:
     ports:
-      - "127.0.0.1:4920:4920"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:4920:4920"
 
   mock-llm:
     ports:
-      - "127.0.0.1:4930:4930"
+      - "${VOYAGER_DEV_BIND_ADDR:?refusing to publish internal ports -- read the header of docker-compose.dev.yml}:4930:4930"

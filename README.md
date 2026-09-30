@@ -142,7 +142,15 @@ make migrate
 make seed                   # ~4 minutes — generates 400k bookings
 make healthcheck            # everything green?
 
-open http://localhost
+open https://localhost
+```
+
+The edge redirects plain HTTP to HTTPS. With `PUBLIC_HOSTNAME=localhost` the certificate comes from Caddy's own CA, so a browser will warn once; accept it, because RUM and Session Replay behave differently over plain HTTP and you want to see what a real user sees.
+
+`make bootstrap` sets `VOYAGER_DEV_BIND_ADDR=127.0.0.1`, and every `make` target then includes `docker-compose.dev.yml` so the service ports are reachable from your terminal for the `scripts/verify-*.sh` suite. By hand that is always both files:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 ```
 
 Then start continuous traffic so dashboards populate:
@@ -164,6 +172,8 @@ make dd-sourcemaps          # RUM sourcemaps
 make logs s=booking         # tail one service
 make up-one s=pricing       # rebuild + restart one service
 make test                   # all four test suites
+make test-go                # or just one: test-web, test-node, test-python, test-go
+make verify                 # every exit-criteria script against a running stack
 make chaos-reset            # clear every chaos flag
 make scenario s=S4          # apply a composite scenario
 make demo-mode              # 100% sampling, 2x load
@@ -220,8 +230,7 @@ Avoid burstable instances (`t3`, `t4g`). CPU credit throttling distorts latency 
 ssh -i <key>.pem ubuntu@<elastic-ip>
 cd /opt/voyager
 
-cp .env.example .env
-$EDITOR .env                # set PUBLIC_HOSTNAME to your domain
+$EDITOR .env                # userdata.sh already created it from .env.example
 
 make build                  # ~12 minutes on m5.xlarge
 make up
@@ -233,6 +242,10 @@ make dd-apply
 ```
 
 Point an A record at the Elastic IP before starting Caddy, and it will obtain a certificate automatically. Then visit `https://your-domain`.
+
+**Do not run `make bootstrap` on a deployed host, and leave `VOYAGER_DEV_BIND_ADDR` empty.** That variable is what keeps `docker-compose.dev.yml` — which publishes Postgres, Redis, Kafka and every service on the host's interfaces — from being applied there; empty, the overlay refuses to load at all. `make bootstrap` sets it, which is the one thing it does that `userdata.sh` has not already done. `infra/ec2/deploy.sh` refuses to deploy if it finds the value filled in.
+
+Full reasoning, and the list of what in this path has never been run against a real instance, is in `docs/runbooks/04-ec2-deploy.md`.
 
 ### 6.3 Updating
 
@@ -271,9 +284,16 @@ Flag catalogue: `05-FUNCTIONALITY.md § 11`. Scenario descriptions: `01-PRD.md �
 
 ## 8. Running a demo
 
-Full runbooks are in `06-USER-FLOWS.md § 9` — one for SRE/platform audiences (45 min), one for developers (25 min).
+Committed runbooks in `docs/runbooks/`, one step per line, written to be held while you talk:
 
-Before every demo, run the checklist in `06-USER-FLOWS.md § 10`. The short version:
+| Runbook | For |
+|---|---|
+| `01-sre-deep-dive.md` | SRE / platform audiences, 45 min (`06-USER-FLOWS.md § 9.1`) |
+| `02-developer-walkthrough.md` | Developers, 25 min (`06-USER-FLOWS.md § 9.2`) |
+| `03-pre-demo-checklist.md` | The checklist and the mid-demo recovery table |
+| `04-ec2-deploy.md` | Deployment, and an honest list of what is untested |
+
+Before every demo, run the checklist. The short version:
 
 ```bash
 make healthcheck     # green, zero active chaos flags
@@ -333,6 +353,70 @@ redis-cli -h localhost HGETALL voyager:chaos     # should be empty
 make migrate                                     # recreates a dropped index
 ```
 
+### `docker compose` refuses to start: "refusing to publish internal ports"
+
+`docker-compose.dev.yml` interpolates `VOYAGER_DEV_BIND_ADDR` into every port
+mapping with `:?`, so it will not load while that value is empty. That is the
+mechanism that keeps the overlay — which publishes Postgres, Redis, Kafka and
+every service on the host's interfaces — off a deployed host.
+
+On a **workstation**, set it:
+```bash
+echo 'VOYAGER_DEV_BIND_ADDR=127.0.0.1' >> .env
+```
+`make bootstrap` does this when it creates `.env`; a `.env` copied by hand from
+`.env.example` will not have it.
+
+On a **deployed host**, leave it empty and do not reach for the overlay. If a
+verify script cannot connect there, that is the design: nothing but the edge is
+reachable. Run the check through the edge instead —
+`EDGE_URL=https://<host> scripts/verify-edge.sh`.
+
+### `make healthcheck` fails on "images carrying no usable commit stamp"
+
+`DD_GIT_COMMIT_SHA` and `DD_GIT_REPOSITORY_URL` are baked into each image at
+build time, because the running container has no git to ask. If they are
+missing or hold a placeholder, Source Code Integration produces stack-frame
+links that resolve to nothing — which is worse than no link, since it looks
+like the integration works and the repository is wrong.
+
+```bash
+make build && make up     # restamps from the working tree
+# or, on a deployed host:
+make deploy               # resolves the SHA and reads it back out to check
+```
+
+If it persists after a rebuild, the value is not reaching Compose. Check it:
+```bash
+docker compose -f docker-compose.yml config | grep -A2 DD_GIT_COMMIT_SHA
+```
+A checkout with no git remote has no repository URL to resolve, so
+`DD_GIT_REPOSITORY_URL` has to come from `.env` in that case.
+
+### No certificate, or Caddy logs "no solvers succeeded"
+
+Caddy answers the ACME HTTP-01 challenge on port 80, so that port has to be
+reachable from the internet even if you only ever visit HTTPS. Check the
+security group, and check that the A record points at this instance before the
+edge starts — Let's Encrypt's rate limit is five failures per hostname per week.
+
+With `PUBLIC_HOSTNAME=localhost` or a bare IP, Caddy signs with its own CA
+instead and never contacts Let's Encrypt at all. That is the right behaviour
+locally, and it means the ACME path is entirely untested until a real domain is
+configured.
+
+### The API returns 404 for everything through the edge
+
+The gateway mounts its routes at `/api/v1`, so the prefix must survive the
+proxy. In `infra/edge/Caddyfile` that is `handle /api/*`; `handle_path` would
+strip it and turn every API call into a 404 from Fastify's not-found handler —
+a JSON error envelope that reads like an application bug rather than a routing
+mistake. Confirm both halves:
+```bash
+curl -sk -o /dev/null -w '%{http_code}\n' "https://<host>/api/v1/ref/airports?q=LON"   # 200
+scripts/verify-edge.sh                                                                  # asserts it
+```
+
 ### Everything is confusing
 ```bash
 make reset     # nuke → up → migrate → seed → chaos-reset
@@ -351,6 +435,8 @@ packages/               Shared zod schemas
 infra/                  Datadog Agent, Postgres, Redis, Kafka, Caddy, EC2 scripts
 datadog/                Dashboards, monitors, SLOs, synthetics, notebooks — as code
 tools/                  Seeder, k6 load, Playwright load, scenario definitions
+scripts/                Operator entry points and the exit-criteria verifiers
+docs/runbooks/          Demo narratives, pre-demo checklist, deployment runbook
 .github/workflows/      CI with Test Optimization
 ```
 

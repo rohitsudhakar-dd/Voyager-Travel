@@ -1,0 +1,215 @@
+# Voyager CI (03-EXECUTION-ORDER.md Phase 13, 02-TECH-STACK.md § 13).
+#
+# Four test suites, a Docker build validation, and -- on main only -- the
+# sourcemap upload that makes RUM stack traces readable.
+#
+# Every suite runs through scripts/run-tests.sh, the same script `make test`
+# calls, in the same containers. A suite that runs one way here and another way
+# on a laptop is a suite that fails only here, which is the least useful place
+# for a test to fail.
+#
+# What this workflow cannot do by itself:
+#
+#   Pipeline Visibility needs Datadog's GitHub App installed on the repository
+#   (Integrations -> GitHub -> Pipelines). There is no workflow-side switch for
+#   it; the `datadog-ci tag` steps below add Voyager's tags to the pipeline
+#   trace that integration creates, and do nothing without it.
+#
+#   Flaky Test Management has to be turned on for the repository in Datadog
+#   before the flaky test in services/loyalty-service/tests/flaky.test.ts is
+#   labelled rather than merely passing after a retry.
+#
+# Untested: this repository has no remote and these jobs have never run. See
+# docs/runbooks/04-ec2-deploy.md for what else is unverified.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to a pull request should cancel the first. Docker build
+# validation is the long pole here and there is no value in finishing it for a
+# commit nobody will merge. main is excluded: its runs feed Test Optimization's
+# history, which is what flaky detection compares against.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  DD_SITE: ${{ vars.DD_SITE || 'datadoghq.com' }}
+  DD_ENV: ci
+
+jobs:
+  test:
+    name: test (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Job level, not step level: `if: env.DD_API_KEY != ''` below can only read
+    # the job's environment, and the `secrets` context is not available in an
+    # `if` at all. A fork's pull request has no secret, and the reporting steps
+    # have to skip rather than fail.
+    env:
+      DD_API_KEY: ${{ secrets.DD_API_KEY }}
+    strategy:
+      # Every suite reports its own results, so a failure in one must not
+      # cancel the others: "Go is broken" and "Go and Python are both broken"
+      # are different bugs and finding out on the next run wastes a cycle.
+      fail-fast: false
+      matrix:
+        suite: [web, node, python, go]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Test Optimization attributes results to a commit, and on a pull
+          # request the default checkout is a merge commit that exists nowhere
+          # else -- which gives every test a history exactly one run long, and
+          # flaky detection nothing to compare.
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Run the ${{ matrix.suite }} suite
+        run: scripts/run-tests.sh ${{ matrix.suite }} --junit
+
+      - name: Report to Test Optimization
+        # always(), so a failing suite still reports. A red run whose results
+        # never reached Datadog is a red run nobody can triage there, and it is
+        # also the run whose flaky test would have been most interesting.
+        if: always() && env.DD_API_KEY != ''
+        run: |
+          npx --yes @datadog/datadog-ci@2 junit upload \
+            --service voyager-ci \
+            --env ci \
+            --tags "suite:${{ matrix.suite }}" \
+            --tags "project:voyager" \
+            .test-reports
+
+      - name: Keep the reports on a failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ matrix.suite }}
+          path: .test-reports
+          retention-days: 7
+
+  # Every image, built the way the deploy path builds them. This is not a
+  # duplicate of `docker compose build` in deploy.sh: it is the check that a
+  # Dockerfile change cannot merge while broken, on a runner that has none of
+  # the layer cache a demo host accumulates.
+  docker-build:
+    name: docker build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write a .env compose can interpolate
+        # docker-compose.yml fails closed on the secrets it needs
+        # (POSTGRES_PASSWORD, DD_API_KEY and the rest use ${VAR:?...}), which
+        # is correct and also means `config` and `build` need a file here.
+        # These are throwaway values for a build that starts nothing.
+        #
+        # VOYAGER_DEV_BIND_ADDR stays empty on purpose: it is what keeps
+        # docker-compose.dev.yml out, and CI is a good place for that to be
+        # true as well.
+        run: |
+          sed -e 's|^\(POSTGRES_PASSWORD\)=.*|\1=ci-not-a-secret|' \
+              -e 's|^\(DD_PG_PASSWORD\)=.*|\1=ci-not-a-secret|' \
+              -e 's|^\(MOCK_DB_PASSWORD\)=.*|\1=ci-not-a-secret|' \
+              -e 's|^\(JWT_SECRET\)=.*|\1=ci-not-a-secret|' \
+              -e 's|^\(ADMIN_SECRET\)=.*|\1=ci-not-a-secret|' \
+              -e 's|^\(DD_API_KEY\)=.*|\1=ci-not-a-secret|' \
+              .env.example > .env
+
+      - name: Assert the port posture before building anything
+        # Cheap, offline, and the check most likely to catch a change that
+        # would otherwise only be noticed by someone scanning the demo host.
+        run: scripts/verify-edge.sh --config-only
+
+      - name: Build every image with a real commit stamp
+        env:
+          # The same two values infra/ec2/deploy.sh resolves. Baked in at build
+          # time because the running container has no git to ask; wrong, and
+          # every Error Tracking stack frame links to nothing.
+          DD_GIT_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          DD_GIT_REPOSITORY_URL: github.com/${{ github.repository }}
+          DD_VERSION: ${{ github.sha }}
+        run: docker compose -f docker-compose.yml build
+
+      - name: Assert the images carry that stamp
+        env:
+          DD_GIT_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          missing=0
+          for service in api-gateway search-service pricing-service \
+                         booking-service payment-service loyalty-service \
+                         notification-worker ai-support-service \
+                         mock-gds mock-payments mock-email mock-llm; do
+            image=$(docker compose -f docker-compose.yml config --format json |
+              python3 -c "import json,sys; print(json.load(sys.stdin)['services']['$service']['image'])" 2>/dev/null ||
+              echo "voyager-$service")
+            actual=$(docker image inspect "$image" \
+              -f '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null |
+              sed -n 's/^DD_GIT_COMMIT_SHA=//p' | head -1)
+            if [ "$actual" != "$DD_GIT_COMMIT_SHA" ]; then
+              echo "::error::$service carries '$actual', expected $DD_GIT_COMMIT_SHA"
+              missing=1
+            fi
+          done
+          exit $missing
+
+  # Sourcemaps go up only from main, and only after the tests pass: they are
+  # keyed by version, so uploading from a branch would point a released
+  # version's maps at a bundle that was never deployed.
+  sourcemaps:
+    name: sourcemaps
+    needs: [test, docker-build]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write a .env compose can interpolate
+        run: |
+          sed -e 's|^\(POSTGRES_PASSWORD\)=.*|\1=ci-not-a-secret|' \
+              -e 's|^\(DD_PG_PASSWORD\)=.*|\1=ci-not-a-secret|' \
+              -e 's|^\(MOCK_DB_PASSWORD\)=.*|\1=ci-not-a-secret|' \
+              -e 's|^\(JWT_SECRET\)=.*|\1=ci-not-a-secret|' \
+              -e 's|^\(ADMIN_SECRET\)=.*|\1=ci-not-a-secret|' \
+              -e 's|^\(DD_API_KEY\)=.*|\1=ci-not-a-secret|' \
+              -e "s|^\(PUBLIC_HOSTNAME\)=.*|\1=${{ vars.PUBLIC_HOSTNAME }}|" \
+              .env.example > .env
+
+      - name: Upload
+        env:
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          # Must be the value the bundle reports at runtime, which is what
+          # infra/ec2/deploy.sh sets: the short SHA. Any other value uploads
+          # maps that resolve nothing.
+          DD_VERSION: ${{ github.sha }}
+          DD_GIT_COMMIT_SHA: ${{ github.sha }}
+          DD_GIT_REPOSITORY_URL: github.com/${{ github.repository }}
+          PUBLIC_HOSTNAME: ${{ vars.PUBLIC_HOSTNAME }}
+        run: scripts/dd-sourcemaps.sh
+
+  # One job to tag the pipeline trace, so it runs whatever the suites did and
+  # the tags are on the trace rather than on four unrelated job spans.
+  tag-pipeline:
+    name: tag pipeline
+    needs: [test, docker-build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DD_API_KEY: ${{ secrets.DD_API_KEY }}
+    steps:
+      - name: Tag
+        if: env.DD_API_KEY != ''
+        run: |
+          npx --yes @datadog/datadog-ci@2 tag --level pipeline \
+            --tags "project:voyager" \
+            --tags "team:demo" \
+            --tags "managed_by:voyager-datadog-config"

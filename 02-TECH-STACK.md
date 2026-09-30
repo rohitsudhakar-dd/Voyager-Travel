@@ -10,7 +10,7 @@ All services run as containers on one EC2 host, on a user-defined bridge network
 
 | Container | Language / Runtime | Framework | Internal port | `DD_SERVICE` | Repo path |
 |---|---|---|---|---|---|
-| `edge` | — | Caddy 2.8 | 80 / 443 | `voyager-edge` | `infra/edge/` |
+| `edge` | — | Caddy 2.8 | 80 / 443, **2019 (internal)** | `voyager-edge` | `infra/edge/` |
 | `web-ui` | Node 20 build → Nginx 1.27 runtime | React 18 + Vite 5 + TypeScript 5.5 | 8080 | `voyager-web` (RUM) | `apps/web-ui/` |
 | `api-gateway` | Node 20.17 LTS | Fastify 4 + TypeScript | 4000 | `voyager-api-gateway` | `services/api-gateway/` |
 | `search-service` | Go 1.23 | chi v5 | 4010 | `voyager-search` | `services/search-service/` |
@@ -33,6 +33,8 @@ All services run as containers on one EC2 host, on a user-defined bridge network
 | `loadgen-browser` | Node 20.17 | Playwright 1.47 (Chromium) | — | `voyager-loadgen-browser` | `tools/loadgen-browser/` |
 
 **Port convention:** `49xx` = mocks, `40xx` = first-party services, in dependency order. Keep it.
+
+**The edge's 2019** is Caddy's Prometheus endpoint, served by the `metrics` directive on a listener that is never published to the host. Two things read it: the Agent's `caddy` check (autodiscovered from a label on the container, § 6.1) and the container's own healthcheck. Liveness has to live there rather than on 80 or 443, because a probe through the site block would depend on `api-gateway` or `web-ui` — and an edge that reports unhealthy because the API is down cannot serve the "the API is down" screen, which is a screen the demo needs.
 
 **Service count:** 13 services appear in APM — 9 first-party (`voyager-web` via RUM, `-api-gateway`, `-search`, `-pricing`, `-booking`, `-payment`, `-loyalty`, `-notifications`, `-ai-support`) plus the 4 mocks. `edge` is visible via the Caddy integration but is not tracer-instrumented. Postgres, Redis, and Kafka appear as downstream nodes. Total Compose containers: ~21 including data layer, agent, seeder, and load generators.
 
@@ -176,7 +178,7 @@ Dev: `pytest`, `pytest-asyncio`, `httpx`, `ruff`, `mypy`.
 | Runtime metrics | `DD_RUNTIME_METRICS_ENABLED=true` | `WithRuntimeMetrics()` | `DD_RUNTIME_METRICS_ENABLED=true` | n/a |
 | Profiler | `DD_PROFILING_ENABLED=true` | `profiler.Start()` | `DD_PROFILING_ENABLED=true` | n/a |
 | LLM Obs | — | — | `ddtrace.llmobs` (`ai-support-service` only) | — |
-| Test Optimization | `dd-trace/ci` with vitest | `gotestsum` + `datadog-ci` | `pytest --ddtrace` | `datadog-ci junit upload` |
+| Test Optimization | `datadog-ci junit upload` (see § 13) | `gotestsum` + `datadog-ci` | `pytest --ddtrace` | `datadog-ci junit upload` |
 
 ### 5.1 Trace context propagation
 
@@ -427,6 +429,7 @@ KAFKA_BROKERS=kafka:9092
 JWT_SECRET=
 ADMIN_SECRET=                    # gates the chaos panel
 PUBLIC_HOSTNAME=                 # used by Caddy for TLS
+VOYAGER_DEV_BIND_ADDR=           # EMPTY on a deployed host; 127.0.0.1 on a workstation. See below.
 SEED_RANDOM_SEED=20260101        # deterministic seeding
 
 # ---- LLM ----
@@ -448,9 +451,17 @@ GATEWAY_BASE_URL=http://api-gateway:4000   # where loadgen-api sends traffic; it
 WEB_BASE_URL=http://web-ui:8080            # origin loadgen-browser opens, so RUM records the same one a person would
 ```
 
-`GATEWAY_BASE_URL` and `WEB_BASE_URL` follow the existing `<SERVICE>_BASE_URL` convention and exist because the two generators are the only containers that address the front door rather than a downstream service. On a deployed host `WEB_BASE_URL` should be the public HTTPS origin, since RUM and Session Replay behave differently over plain HTTP and a generator on the wrong scheme produces sessions that do not match the ones people create.
-
 `RUM_SESSION_SAMPLE_RATE` and `RUM_SESSION_REPLAY_SAMPLE_RATE` carry no `VITE_` prefix because they describe the RUM application as a whole, but the browser is the only thing that reads them. `apps/web-ui/Dockerfile` therefore takes them as build args and re-exports them as `VITE_RUM_SESSION_SAMPLE_RATE` and `VITE_RUM_SESSION_REPLAY_SAMPLE_RATE`, exactly as it already derives `VITE_DD_ENV` from `DD_ENV`. Both renamed pairs exist so a value has one source in `.env` rather than two that can disagree — and, like every `VITE_*` value, they are baked into the bundle at build time, so changing one means rebuilding `web-ui` rather than restarting it.
+
+**`VOYAGER_DEV_BIND_ADDR`** is the host address `docker-compose.dev.yml` publishes its ports on, and it is also the switch that decides whether that overlay may be applied at all. Every `ports` entry in the overlay interpolates it with `:?`, so an empty value makes Compose refuse the whole command with a message pointing at that file's header. Three things then follow from one value:
+
+- **A deployed host cannot apply the overlay.** `.env.example` ships the value empty and `infra/ec2/userdata.sh` copies that file verbatim, so the overlay refuses on the server. `infra/ec2/deploy.sh` additionally aborts if the value has been filled in, because the way that happens is someone running `make bootstrap` there to fix something unrelated.
+- **A workstation always gets both files.** `make bootstrap` — which is where someone asserts they are on a workstation — writes `127.0.0.1`, and the `Makefile` adds `-f docker-compose.dev.yml` whenever the value is non-empty. So `make up` on a laptop publishes the internal ports the `scripts/verify-*.sh` suite needs, and the same target on a server does not.
+- **The bind address cannot be widened by editing the compose file.** `0.0.0.0` is one character away from `127.0.0.1` in a file nobody reviews.
+
+`scripts/verify-edge.sh` asserts all of it: that the production render publishes only the edge, that the overlay refuses with the value empty, and that with it set every published port is still on loopback.
+
+`GATEWAY_BASE_URL` and `WEB_BASE_URL` follow the existing `<SERVICE>_BASE_URL` convention and exist because the two generators are the only containers that address the front door rather than a downstream service. On a deployed host `WEB_BASE_URL` should be the public HTTPS origin, since RUM and Session Replay behave differently over plain HTTP and a generator on the wrong scheme produces sessions that do not match the ones people create.
 
 ### 7.2 Per-service Datadog variables
 
@@ -499,12 +510,12 @@ comment, because both failure modes are silent.
 | Knob | Default | Notes |
 |---|---|---|
 | `DD_TRACE_SAMPLE_RATE` | `1.0` | Drop to `0.2` when idle; keep at `1.0` during demos |
-| `DD_TRACE_SAMPLING_RULES` | **empty in demo-mode** | Set only by `make idle-mode`. In demo-mode it must be empty so everything is sampled at 100%. |
+| `DD_TRACE_SAMPLING_RULES` | **health probes only in demo-mode** | Both modes exclude `/health` and `/ready`; idle-mode adds the rest. |
 | `RUM_SESSION_REPLAY_SAMPLE_RATE` | `100` | The most expensive single setting. Drop to `20` for always-on. |
 | `LOADGEN_API_VUS` | `15` | Directly proportional to span volume |
 | `DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL` | `true` | Exclude the loadgen containers to cut noise |
 
-**Idle-mode sampling rules** (applied by `make idle-mode`, cleared by `make demo-mode`):
+**Idle-mode sampling rules** (applied by `make idle-mode`):
 
 ```json
 [
@@ -516,7 +527,20 @@ comment, because both failure modes are silent.
 ]
 ```
 
-Rules are evaluated in order, first match wins. The `*` service glob covers the mocks too. `make demo-mode` sets `DD_TRACE_SAMPLING_RULES=""` and `DD_TRACE_SAMPLE_RATE=1.0`; `make idle-mode` applies the rules above and reduces loadgen intensity and replay sampling together.
+**Demo-mode sampling rules** (applied by `make demo-mode`) — the first two of the above and nothing else:
+
+```json
+[
+  {"service":"*","resource":"GET /health","sample_rate":0.0},
+  {"service":"*","resource":"GET /ready","sample_rate":0.0}
+]
+```
+
+Rules are evaluated in order, first match wins. The `*` service glob covers the mocks too. Anything that matches no rule falls through to `DD_TRACE_SAMPLE_RATE`, which demo-mode sets to `1.0` — so demo-mode is 100% of everything except the probes.
+
+This section previously said demo-mode leaves the variable empty. That contradicted `05-FUNCTIONALITY.md § 16`, which excludes `/health` and `/ready` from trace sampling unconditionally, and it put roughly twenty probes a minute per service back into APM during the one mode where someone is looking at APM. The health exclusions now belong to both modes; the difference between them is the last three rules and the replay rate.
+
+Both modes are applied by rewriting `.env` and recreating the application containers, because each tracer reads `DD_TRACE_SAMPLE_RATE` and `DD_TRACE_SAMPLING_RULES` once, at process start. That takes about half a minute, which is why this is a mode you set before a demo rather than a dial you turn during one. Load-generator intensity is the exception — the generators poll `voyager:loadgen`, so that part takes effect in seconds.
 
 ---
 
@@ -555,7 +579,16 @@ Set `mem_limit` on every service in Compose. An OOM-killed Postgres mid-demo is 
 
 ### 9.2 Bootstrap
 
-`infra/ec2/userdata.sh` installs Docker Engine + Compose plugin, `make`, `git`, sets up log rotation for container logs, clones the repo, and leaves the operator to fill in `.env`. Full steps in `README.md § 6`.
+`infra/ec2/userdata.sh` installs Docker Engine + Compose plugin, `make`, `git`, sets up log rotation for container logs, clones the repo, and leaves the operator to fill in `.env`. Full steps in `README.md § 6`; the runbook with the reasoning is `docs/runbooks/04-ec2-deploy.md`.
+
+Set `VOYAGER_REPO_URL` at the top of the script before launching — it is the only value without a usable default. `VOYAGER_DIR` (default `/opt/voyager`) and `VOYAGER_USER` (default `ubuntu`) are the other two knobs. These are variables of that script, not of `.env`.
+
+Two things the script does deliberately *not* do:
+
+- **It does not build or start anything.** The stack cannot come up before `.env` has a Datadog API key, and a user-data script that dies halfway through a twelve-minute build leaves an instance whose state nobody can describe from the console log.
+- **It does not run `make bootstrap`.** It copies `.env.example` verbatim instead. Bootstrap's one extra act is setting `VOYAGER_DEV_BIND_ADDR`, which is exactly what must stay empty on a deployed host (§ 7.1).
+
+Container logging must stay on the `json-file` driver with a size cap, and the script sets both. The Agent collects container logs by reading the files that driver writes — the `/var/lib/docker/containers` mount in `docker-compose.yml` — so switching to `journald` or `local` makes log collection return nothing at all, with no error. Uncapped, the same files fill the 100 GB volume within a few weeks of continuous load generation, and Postgres is the process that notices first.
 
 ---
 
@@ -660,6 +693,24 @@ make deploy           # git pull, set DD_VERSION + DD_GIT_COMMIT_SHA from SHA, b
                       # rolling restart, migrate, dd-sourcemaps, healthcheck
 ```
 
+Added since, and documented here because the runbooks call them:
+
+```make
+make test-web         # one suite: vitest in apps/web-ui
+make test-node        # one suite: vitest + typecheck in the Node services
+make test-python      # one suite: pytest in the four Python services
+make test-go          # one suite: go vet + go test in the two Go services
+make dbm-setup        # create the datadog role, grants and explain function (§ 6.2)
+make verify           # every exit-criteria script except verify-tracing
+make verify-edge      # phase 13: the edge proxy and the port posture
+make verify-tracing   # phase 8: stops and restarts six services; minutes
+make verify-dbm       # phase 10: DBM and the four database chaos paths
+```
+
+`make test` is the four `test-*` targets in order; CI's matrix calls them individually so a failure names the runtime. `verify-tracing` is out of `verify` because it stops and restarts six services, which is too invasive for a routine check; `verify-dbm` is out for the same reason, since it drops an index on a live database and pauses the load generators to measure without them. Both restore what they touched from an exit trap rather than at the end, so an interrupted run does not leave the stack damaged.
+
+Every target resolves its Compose file set from `VOYAGER_DEV_BIND_ADDR` (§ 7.1): both files on a workstation, the base file alone on a deployed host. `down`, `nuke` and `ps` additionally name `docker-compose.loadgen.yml`, so the generators are not orphans of the project — without it `ps` omits them, and "is the load generator running", the first question an empty dashboard raises, cannot be answered with the operator interface.
+
 ---
 
 ## 12. Pinning and reproducibility rules
@@ -670,3 +721,49 @@ make deploy           # git pull, set DD_VERSION + DD_GIT_COMMIT_SHA from SHA, b
 4. **No service reads another service's database.** All cross-service access is HTTP or Kafka. This is what makes the service map honest.
 5. **`DD_SERVICE` is set once, in Compose**, never hardcoded in application code.
 6. **Health endpoints are uniform**: `GET /health` (liveness, no dependencies) and `GET /ready` (checks DB/Redis/Kafka). Compose healthchecks use `/health`; the gateway's aggregate status page uses `/ready`.
+
+---
+
+## 13. Continuous integration
+
+`.github/workflows/ci.yml`. Four test jobs as a matrix, a Docker build validation, a sourcemap upload on `main`, and a job that tags the pipeline trace.
+
+### 13.1 The four suites
+
+Every suite runs through `scripts/run-tests.sh`, which is the same script `make test` calls, in the same container images. One script rather than a Makefile recipe plus a workflow step, because a suite that runs differently in CI than on a laptop is a suite that fails only in CI — the least useful place for a test to fail.
+
+| Suite | Target | What runs | Where |
+|---|---|---|---|
+| `web` | `make test-web` | `vitest run` | `apps/web-ui` |
+| `node` | `make test-node` | `vitest run`, then `tsc --noEmit` | `services/loyalty-service`; typecheck in `services/api-gateway` and all four mocks |
+| `python` | `make test-python` | `pytest` (`--ddtrace` when a key is present) | `booking-service`, `payment-service`, `notification-worker`, `ai-support-service` |
+| `go` | `make test-go` | `go vet`, then `gotestsum` | `search-service`, `pricing-service` |
+
+`loyalty-service` is the only Node service with a test suite; the gateway and the mocks are typechecked instead, which is the strongest claim available about code that has no tests and is not nothing — the zod schemas in `packages/shared-schemas` are shared with `web-ui`, so a contract change only one side followed fails there.
+
+Dependencies install into named Docker volumes, never into the bind-mounted working tree. The tree holds the host's `node_modules`, built for a different architecture than the Linux containers, and overwriting them breaks the host's editor tooling for reasons nobody would connect to having run the tests.
+
+### 13.2 Reporting
+
+JUnit XML from all four suites, uploaded with `datadog-ci junit upload` under service `voyager-ci` and tagged `suite:<name>`. § 5 lists `dd-trace/ci` for vitest; both vitest suites report through JUnit instead, because the SDK route needs `dd-trace` in `web-ui`'s dependency tree — and therefore in the browser bundle's lockfile — for a benefit that the JUnit path already provides. `pytest` keeps `--ddtrace`, which costs nothing there because `ddtrace` is already installed.
+
+The upload step runs under `always()`: a red run whose results never reached Datadog is a red run nobody can triage there, and it is also the run whose flaky test would have been most interesting.
+
+Two things CI cannot switch on for itself, and both are prerequisites rather than bugs:
+
+- **Pipeline Visibility** needs Datadog's GitHub App installed on the repository. The `datadog-ci tag` job adds Voyager's tags to the pipeline trace that integration creates and does nothing without it.
+- **Flaky Test Management** has to be enabled for the repository before the flaky test is labelled rather than merely passing after a retry.
+
+### 13.3 The flaky test
+
+`services/loyalty-service/tests/flaky.test.ts`, one test, commented as deliberate at the top of the file. It is a wall-clock assertion with two milliseconds of headroom over the timer it measures, and it carries `retry: 3` so the pipeline stays green.
+
+A coin flip would have been easier to tune and would have been a fake flake: it fails at the same rate on an idle runner as on a loaded one. This one fails more often exactly when CI is busy, which is what makes real flakes hard to reproduce and tempting to re-run and ignore.
+
+### 13.4 Build validation
+
+`docker compose -f docker-compose.yml build` for every image, on a runner with none of the layer cache a demo host accumulates, with `DD_GIT_COMMIT_SHA` and `DD_GIT_REPOSITORY_URL` set the way `infra/ec2/deploy.sh` sets them. The job then **reads the commit stamp back out of the built images** and fails if any of the twelve disagrees, which is the same assertion `deploy.sh` and `make healthcheck` make: those two values are baked in at build time, and if they are wrong there is no error anywhere — Error Tracking simply produces stack-frame links that resolve to nothing.
+
+The job also runs `scripts/verify-edge.sh --config-only` before building, which asserts offline that the production Compose configuration publishes only the edge's 80 and 443. It is the cheapest check in the workflow and the one most likely to catch a change that would otherwise only be noticed by someone scanning the demo host.
+
+Both the build job and the sourcemap job write a throwaway `.env` from `.env.example` first: `docker-compose.yml` fails closed on the secrets it needs (`${POSTGRES_PASSWORD:?…}` and friends), which is correct and also means `config` and `build` need a file to interpolate from. `VOYAGER_DEV_BIND_ADDR` is left empty there, so the dev overlay is as refused in CI as it is on a deployed host.

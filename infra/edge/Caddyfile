@@ -1,0 +1,86 @@
+# Voyager's front door. The only container that binds a host port
+# (02-TECH-STACK.md § 9).
+#
+# Two things here are load-bearing and easy to get wrong:
+#
+#   1. /api reaches api-gateway with the prefix intact. `handle` matches the
+#      path and leaves it alone; `handle_path` would strip it. The gateway
+#      mounts its routes at /api/v1, so a stripped prefix turns every API call
+#      into a 404 from Fastify's not-found handler -- a JSON error envelope
+#      that looks like an application bug rather than a routing mistake.
+#
+#   2. The site address is the public hostname, so Caddy decides for itself
+#      whether to ask Let's Encrypt (a real domain) or sign with its own CA
+#      (`localhost`, or a bare IP). There is no TLS configuration to get wrong
+#      because there is no TLS configuration.
+
+{
+	# Nothing in Voyager drives Caddy over its admin API, and the admin API can
+	# rewrite the configuration of the one container that is reachable from
+	# outside. Metrics come from the `metrics` directive below instead.
+	admin off
+
+	servers {
+		# Per-host HTTP metrics are opt-in since Caddy 2.7. Without this the
+		# /metrics endpoint still answers, but with process metrics only, and
+		# the Datadog caddy integration reports a service that serves no
+		# requests.
+		metrics
+	}
+}
+
+(voyager) {
+	# Sourcemaps are uploaded to Datadog at deploy time and never served
+	# (02-TECH-STACK.md § 3). web-ui's image deletes them as well; this is the
+	# assertion that survives someone changing that Dockerfile.
+	@sourcemap path *.map
+	handle @sourcemap {
+		respond 404
+	}
+
+	handle /api/* {
+		reverse_proxy api-gateway:4000 {
+			# The support chat is SSE. Buffered, every token in a reply arrives
+			# at once when the stream closes, which makes the streaming demo
+			# look like a slow non-streaming one.
+			flush_interval -1
+		}
+	}
+
+	handle {
+		reverse_proxy web-ui:8080
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	encode zstd gzip
+
+	log {
+		output stdout
+		format json
+	}
+}
+
+{$PUBLIC_HOSTNAME:localhost} {
+	import voyager
+}
+
+# Internal only, never published to the host: the Datadog caddy integration
+# scrapes /metrics here and the container healthcheck uses it as liveness.
+# Liveness must not depend on api-gateway or web-ui -- an edge that reports
+# unhealthy because the API is down cannot serve the "the API is down" screen,
+# which is a screen the demo needs (05-FUNCTIONALITY.md § 16).
+:2019 {
+	handle /metrics {
+		metrics
+	}
+	handle {
+		respond "voyager-edge" 200
+	}
+}

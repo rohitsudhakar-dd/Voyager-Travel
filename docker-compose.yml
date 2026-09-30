@@ -21,6 +21,13 @@ volumes:
     name: voyager_redisdata
   kafkadata:
     name: voyager_kafkadata
+  # Caddy's certificates and ACME account key. Without a volume every restart
+  # is a fresh issuance, and Let's Encrypt's rate limit is five per hostname
+  # per week -- which a few restarts during a deploy will spend.
+  caddydata:
+    name: voyager_caddydata
+  caddyconfig:
+    name: voyager_caddyconfig
 
 # Connection details shared by every service that talks to the data layer.
 x-data-env: &data-env
@@ -733,6 +740,57 @@ services:
       timeout: 5s
       retries: 6
       start_period: 10s
+    mem_limit: 128m
+
+  # ------------------------------------------------------------------ edge --
+
+  # The front door, and the only container in this file permitted to bind a
+  # host port. Everything else is reachable only from the `voyager` network,
+  # which is what lets the EC2 security group open 80 and 443 and nothing else
+  # (02-TECH-STACK.md § 9).
+  edge:
+    image: caddy:2.8-alpine
+    container_name: edge
+    hostname: edge
+    restart: unless-stopped
+    networks: [voyager]
+    ports:
+      - "80:80"
+      - "443:443"
+      # HTTP/3. Caddy serves it by default and advertises it in Alt-Svc; left
+      # unpublished, browsers that accept the advertisement retry over TCP and
+      # every one of those retries is a stall in the RUM resource timings.
+      - "443:443/udp"
+    # No depends_on, for the same reason web-ui has none: the edge has to be
+    # able to serve the page that says the API is down, and it has to be able
+    # to answer an ACME challenge before the application is healthy.
+    environment:
+      # There is no tracer in this image. DD_SERVICE exists so the Agent's
+      # container tagging files Caddy's logs and metrics under one name
+      # (02-TECH-STACK.md § 1).
+      DD_SERVICE: voyager-edge
+      DD_ENV: ${DD_ENV:-demo}
+      DD_VERSION: ${DD_VERSION:-dev}
+      # Caddy reads this as its site address and decides from it whether to
+      # use Let's Encrypt or its own CA. `localhost` gets the internal CA.
+      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:-localhost}
+    volumes:
+      - ./infra/edge/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    labels:
+      com.datadoghq.ad.checks: |
+        {"caddy":{"init_config":{},"instances":[{"openmetrics_endpoint":"http://%%host%%:2019/metrics"}]}}
+    healthcheck:
+      # 2019 is internal and serves Caddy's own metrics, so this proves the
+      # process is routing without asking anything of api-gateway or web-ui.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/metrics || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    # 02-TECH-STACK.md § 9.1 budgets 256m for edge and web-ui together; web-ui
+    # holds 128m of it.
     mem_limit: 128m
 
   # -------------------------------------------------------------- datadog --
