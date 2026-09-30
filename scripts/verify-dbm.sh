@@ -198,7 +198,18 @@ assert 'the datadog role can execute it against an application table' \
 section 'The Agent runs the Postgres check with DBM on'
 
 if docker ps --format '{{.Names}}' | grep -qx datadog-agent; then
-  agent_configcheck=$(docker exec datadog-agent agent configcheck 2>/dev/null)
+  # Container autodiscovery is not ready the moment the Agent is: the docker
+  # workloadmeta collector has to enumerate images before any label is read,
+  # and only then does the check get scheduled and run. An Agent recreated a
+  # minute ago therefore looks exactly like an Agent whose labels are wrong,
+  # so give it a bounded chance to catch up before saying so.
+  agent_waited=0
+  for _ in $(seq 30); do
+    agent_configcheck=$(docker exec datadog-agent agent configcheck 2>/dev/null)
+    grep -q '^=== postgres check ===$' <<<"$agent_configcheck" && break
+    sleep 5; agent_waited=$(( agent_waited + 5 ))
+  done
+  (( agent_waited > 0 )) && note "waited ${agent_waited}s for the Agent to discover the container"
   postgres_config=$(awk '/^=== postgres check ===$/,/^===$/' <<<"$agent_configcheck")
 
   if [[ -z "$postgres_config" ]]; then
@@ -213,7 +224,11 @@ if docker ps --format '{{.Names}}' | grep -qx datadog-agent; then
     assert_contains 'it connects as datadog' "$postgres_config" 'username: datadog'
   fi
 
-  agent_status=$(docker exec datadog-agent agent status 2>/dev/null)
+  for _ in $(seq 24); do
+    agent_status=$(docker exec datadog-agent agent status 2>/dev/null)
+    grep -q '^    postgres (' <<<"$agent_status" && break
+    sleep 5
+  done
   postgres_status=$(awk '/^    postgres \(/,/^$/' <<<"$agent_status")
 
   if [[ -z "$postgres_status" ]]; then
@@ -268,13 +283,28 @@ assert_at_least 'the top-query list is more than one statement long' \
 
 section 'db_n_plus_one loops where it should join'
 
-token=$(curl -s -X POST "$GATEWAY/api/v1/auth/login" -H 'content-type: application/json' \
-  -d "{\"email\":\"$POWER_USER\",\"password\":\"$POWER_PASSWORD\"}" |
-  python3 -c 'import json,sys; print(json.load(sys.stdin).get("accessToken",""))' 2>/dev/null)
+login() {
+  token=$(curl -s -X POST "$GATEWAY/api/v1/auth/login" -H 'content-type: application/json' \
+    -d "{\"email\":\"$POWER_USER\",\"password\":\"$POWER_PASSWORD\"}" |
+    python3 -c 'import json,sys; print(json.load(sys.stdin).get("accessToken",""))' 2>/dev/null)
+}
+login
 
+# Re-signs in on a 401 rather than reporting one. The access token outlives a
+# healthy run comfortably, but every section here deliberately makes the
+# database slow, and a run that hits a loaded host can outlast the token --
+# which then shows up as a pool that never opened and a reset that never
+# took, neither of which happened.
 mine() {
-  curl -s -o /dev/null -w '%{http_code}' -H "authorization: Bearer $token" \
-    "$GATEWAY/api/v1/bookings/mine?page=1&size=20"
+  local code
+  code=$(curl -s -o /dev/null -w '%{http_code}' -H "authorization: Bearer $token" \
+    "$GATEWAY/api/v1/bookings/mine?page=1&size=20")
+  if [[ "$code" == 401 ]]; then
+    login
+    code=$(curl -s -o /dev/null -w '%{http_code}' -H "authorization: Bearer $token" \
+      "$GATEWAY/api/v1/bookings/mine?page=1&size=20")
+  fi
+  printf '%s' "$code"
 }
 
 if [[ -z "$token" ]]; then
@@ -392,6 +422,18 @@ print(round(xs[min(len(xs) - 1, int(0.95 * len(xs)))]) if xs else 0)
   rm -f "$out"
 }
 
+# The lower of two passes, applied to both sides of the comparison so it
+# cannot flatter either. Contention on a shared host only ever adds latency,
+# so repeated sampling estimates the uncontended figure from below; without
+# this a baseline measured while something else hammers the stack reads as
+# 27ms instead of 6ms and the ratio collapses for reasons the index had no
+# part in.
+p95_best() {
+  local a b
+  a=$(p95_ms); b=$(p95_ms)
+  (( a < b )) && printf '%s' "$a" || printf '%s' "$b"
+}
+
 if [[ -z "$token" ]]; then
   bad 'db_drop_index latency comparison'
   note 'skipped: no signed-in power user'
@@ -411,7 +453,7 @@ else
 
   mine >/dev/null  # warm the caches so the comparison is not measuring cold I/O
   read -r baseline_exec baseline_calls <<<"$(mean_exec_ms)"
-  baseline_p95=$(p95_ms)
+  baseline_p95=$(p95_best)
 
   admin_put '{"db_drop_index":true}'; sleep 3
   assert 'the flag really drops the index' \
@@ -429,7 +471,7 @@ else
 
   mine >/dev/null
   read -r dropped_exec dropped_calls <<<"$(mean_exec_ms)"
-  dropped_p95=$(p95_ms)
+  dropped_p95=$(p95_best)
 
   # The exit criterion is written about the endpoint, and the endpoint is the
   # wrong place to read this particular number. Both are asserted, against
@@ -457,7 +499,7 @@ print(int(d * 10 / b) if b > 0 else 0)")
     fi
   fi
 
-  note "GET /bookings/mine p95 over ${LOAD_REQUESTS} requests at ${LOAD_CLIENTS} concurrent clients: ${baseline_p95}ms -> ${dropped_p95}ms"
+  note "GET /bookings/mine p95, best of two passes of ${LOAD_REQUESTS} requests at ${LOAD_CLIENTS} concurrent clients: ${baseline_p95}ms -> ${dropped_p95}ms"
   if (( baseline_p95 <= 0 )); then
     bad 'endpoint p95 rises materially'
     note 'the baseline measured zero, so the ratio would be meaningless'
@@ -586,8 +628,13 @@ else
   sleep 2
   starved_conns=$(booking_conns)
   note "booking-service backends: ${normal_conns} normally -> ${starved_conns} starved"
-  if [[ "${starved_conns:-99}" =~ ^[0-9]+$ ]] && (( starved_conns <= 2 )); then
+  # Zero is excluded deliberately. A booking-service that is crash-looping,
+  # unreachable or refusing every request holds no connections either, and
+  # would otherwise satisfy "at most two" without the flag doing anything.
+  if [[ "${starved_conns:-}" =~ ^[0-9]+$ ]] && (( starved_conns >= 1 && starved_conns <= 2 )); then
     ok 'the flag really clamps the pool to two connections'
+  elif [[ "${starved_conns:-0}" == 0 ]]; then
+    bad 'the flag really clamps the pool to two connections (got 0 -- booking-service held no connections at all, so nothing was measured)'
   else
     bad "the flag really clamps the pool to two connections (got ${starved_conns})"
   fi
