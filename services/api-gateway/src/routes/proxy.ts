@@ -161,10 +161,16 @@ export function registerProxyRoutes(app: FastifyInstance, deps: Deps): void {
     const bookingId = String((request.body as Record<string, unknown>)?.bookingId ?? '');
     if (bookingId) await advanceCart(deps, bookingId, 'payment');
 
+    // The public body carries `amount` (05-FUNCTIONALITY.md § 2.6);
+    // payment-service names the same field `amountCents`. Translating here is
+    // the gateway's job -- forwarded unchanged, the service reads no amount at
+    // all and rejects the body, which is every card in the demo declining
+    // before it reaches the provider.
+    const { amount, ...rest } = (request.body ?? {}) as Record<string, unknown>;
     const body = await forward(request, reply, 'payment', {
       method: 'POST',
       path: '/v1/payments/authorize',
-      body: request.body,
+      body: amount === undefined ? rest : { ...rest, amountCents: amount },
       headers: { 'idempotency-key': key },
       timeoutMs: PAYMENT_TIMEOUT_MS,
     });

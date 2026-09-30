@@ -197,7 +197,7 @@ class NotificationConsumer:
         self._log_outcome(record, outcome)
         self._record_metrics(record, outcome)
 
-    async def _mark_sent(self, payload: dict) -> None:
+    async def _mark_sent(self, raw: bytes | None) -> None:
         """Record that this booking's mail has gone out.
 
         The confirmation page asks whether the itinerary has been sent, and
@@ -209,11 +209,26 @@ class NotificationConsumer:
         traveller is still looking at the page. A day is far longer than that
         and keeps the key count bounded on its own.
 
-        Failures are swallowed. An unreachable Redis should cost the amber
-        "your email is on its way" banner, not a redelivery of mail that has
-        already been sent.
+        Takes the raw message rather than a parsed one because that is what the
+        deliverer takes, and it parses inside its own retry loop.
+
+        Nothing here is allowed to raise. The mail has already gone by this
+        point, so a failure to write the marker must cost the amber "your
+        email is on its way" banner and nothing else -- certainly not the
+        consumer, which would redeliver every message it had not committed.
         """
-        booking_id = payload.get("bookingId") or payload.get("booking_id")
+        try:
+            payload = json.loads(raw) if raw else {}
+        except (TypeError, ValueError):
+            return
+        if not isinstance(payload, dict):
+            return
+        # The booking id rides inside the envelope's payload, beside
+        # `variables` rather than in it, which is also where templates.py
+        # reads it from.
+        inner = payload.get("payload")
+        body = inner if isinstance(inner, dict) else payload
+        booking_id = body.get("bookingId") or body.get("booking_id")
         if not booking_id:
             return
         try:
