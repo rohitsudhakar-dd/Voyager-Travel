@@ -9,7 +9,12 @@ RUN go mod download
 
 COPY cmd ./cmd
 COPY internal ./internal
-RUN go build -trimpath -ldflags="-s -w" -o /out/pricing-service ./cmd/server
+# No -s -w. Those strip the symbol table and DWARF, and the Go profiler
+# reads them to put function names on a flame graph; without them the
+# profile is a wall of addresses (02-TECH-STACK.md § 4.2). -trimpath stays:
+# it shortens paths to module-relative, which is what Source Code
+# Integration wants anyway.
+RUN go build -trimpath -o /out/pricing-service ./cmd/server
 
 # ---- runtime ----
 FROM alpine:3.20
