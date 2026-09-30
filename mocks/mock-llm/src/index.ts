@@ -14,6 +14,7 @@ import Fastify, { FastifyReply } from 'fastify';
 import * as chaos from './chaos';
 import { config } from './config';
 import {
+  asksForHuman,
   bloat,
   classify,
   degradedResponse,
@@ -90,7 +91,14 @@ function plan(body: CompletionBody): Plan {
     };
   }
 
-  const wanted = PREFERRED_TOOL[intent];
+  // Asking for a person outranks whatever else the message was about, and it
+  // cannot be derived from the intent: any of the six can end in "just put me
+  // through to someone", and the commonest phrasing of it classifies as
+  // `general`, which has no preferred tool at all. Without this nothing ever
+  // selects `escalate_to_human`, so the tool and `voyager.support.escalations`
+  // are both dead code that looks implemented.
+  const escalating = asksForHuman(userText) && toolNames.has('escalate_to_human');
+  const wanted = escalating ? 'escalate_to_human' : PREFERRED_TOOL[intent];
   const shouldCallTool =
     !chaos.isEnabled('llm_degrade_tools') &&
     !hasToolResult(messages) &&
@@ -102,6 +110,7 @@ function plan(body: CompletionBody): Plan {
     // Cancellation is only ever proposed after the user has said yes, and
     // even then the real gate is in the tool handler.
     const tool =
+      !escalating &&
       intent === 'cancellation_policy' &&
       isAffirmative(userText) &&
       toolNames.has('initiate_cancellation')

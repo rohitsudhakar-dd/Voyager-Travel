@@ -39,6 +39,28 @@ export const PREFERRED_TOOL: Record<Intent, string | null> = {
   general: null,
 };
 
+/**
+ * Whether the traveller has asked for a person.
+ *
+ * Deliberately not an intent. Asking for a human can arrive inside any of the
+ * six, and `voyager.support.escalations` (§ 14) is tagged with the intent the
+ * traveller was already on -- an `escalation` intent would erase exactly the
+ * thing that metric is for. It matches the `escalate_to_human` description in
+ * `services/ai-support-service/app/tools/schemas.py`: "use when the traveller
+ * asks for a person".
+ *
+ * "agent" only counts next to a verb of speaking, because in an OTA "travel
+ * agent" is the shop, not the escape hatch.
+ */
+export function asksForHuman(text: string): boolean {
+  return (
+    /\b(?:human|real person|a person|representative|someone else)\b/i.test(text) ||
+    /\b(?:speak|talk|chat)\s+(?:to|with)\s+(?:a\s+|an\s+|someone\s+)?(?:human|person|agent|advisor|someone)\b/i.test(
+      text,
+    )
+  );
+}
+
 const PNR_PATTERN = /\b([A-HJ-NP-Z2-9]{6})\b/;
 // The longest alternative first, and the optional " is" applied after all of
 // them. Ordered the other way, "my last name is Lovelace" matches the bare
@@ -61,6 +83,10 @@ export function extractArguments(tool: string, text: string): Record<string, unk
       return { bookingId: bookingId ?? pnr ?? null };
     case 'get_loyalty_balance':
       return {};
+    case 'escalate_to_human':
+      // Capped: a summary is a handover note, and the handler stores whatever
+      // it is given.
+      return { summary: text.trim().slice(0, 200) };
     default:
       return {};
   }
