@@ -61,9 +61,12 @@ GOOD_CARD=4242424242424242
 DECLINED_CARD=4000000000009995
 ERROR_CARD=4000000000000119
 
-# Just under the 25,000 silver threshold (loyalty-service/src/points.ts), so one
-# more booking crosses it. Set after the first accrual has created the row.
-JUST_UNDER_SILVER=24800
+# One point under the 25,000 silver threshold (loyalty-service/src/points.ts), so
+# the next booking crosses it however few points that fare earns. A gap of a
+# couple of hundred assumed every fare earned that much; a short-haul fare
+# earns under a hundred and never leaves standard. Set after the first accrual
+# has created the row.
+JUST_UNDER_SILVER=24999
 
 LOADGEN=(loadgen-api loadgen-browser)
 
@@ -142,6 +145,11 @@ if ! docker exec datadog-agent agent dogstatsd-stats >/dev/null 2>&1; then
 fi
 pass "agent dogstatsd-stats is available"
 
+# Checked again at the end. Anything that restarts the Agent mid-run empties the
+# stats store, and the result reads exactly like instrumentation that never
+# fired -- which is what happened on the run this guard was written for.
+agent_started=$(docker inspect -f '{{.State.StartedAt}}' datadog-agent 2>/dev/null)
+
 : >"$STATS"
 
 # Appended rather than overwritten, once per phase. The Agent's stats store is
@@ -152,6 +160,19 @@ capture_stats() {
   # every ten seconds, and the Agent aggregates on its own ten-second tick.
   sleep 12
   docker exec datadog-agent agent dogstatsd-stats 2>/dev/null >>"$STATS"
+}
+
+# The same, for a metric that arrives later than the phase that triggered it. A
+# confirmation email is produced by one consumer and delivered by another, and
+# this stack's notification worker runs tens of seconds behind whenever anything
+# has queued up, so a fixed wait reports a lagging consumer as an absent metric.
+capture_until() {
+  local name=$1 deadline=$(( $(date +%s) + ${2:-120} ))
+  while :; do
+    capture_stats
+    grep -qF "$name " "$STATS" && return 0
+    (( $(date +%s) >= deadline )) && return 1
+  done
 }
 
 field() { python3 -c "
@@ -372,12 +393,27 @@ fi
 read -r dlq_booking dlq_total <<<"$(open_cart)"
 if [[ -n ${dlq_booking:-} ]]; then
   set_flags '{"email_failure_rate":1}'
+  # Read back rather than assumed. The chaos hash is shared and this stack has
+  # more than one thing resetting it, and a run that loses that race reports a
+  # missing metric when what it actually had was a missing flag.
+  if [[ -z $(redis_do HGET voyager:chaos email_failure_rate) ]]; then
+    fail "email_failure_rate armed (the DLQ counter cannot be driven without it)"
+  else
+    pass "email_failure_rate armed"
+  fi
+
   authorize "$dlq_booking" "$dlq_total" "$GOOD_CARD" "metrics-$(date +%s%N)"
   await_pnr "$dlq_booking" >/dev/null
+  # The PNR means the confirmation was published, not that mock-email has
+  # answered it. The flag therefore stays set until the metric has arrived:
+  # clearing it on the PNR lets the worker deliver the message after all, and
+  # a fixed wait instead of this one is what an earlier run failed on.
+  note "waiting for the confirmation email to be rejected"
+  capture_until voyager.notifications.dlq 150
   reset_flags
+else
+  capture_stats
 fi
-
-capture_stats
 
 # ------------------------------------------------------- holds and carts --
 
@@ -437,6 +473,13 @@ fi
 
 capture_stats
 
+# Sweepers and the Node client flush on their own clocks. A hold that expires
+# during the support conversation is not in the snapshot taken immediately
+# afterwards, so the assertions wait out one more interval and look again.
+note "waiting for late sweepers to flush"
+sleep 20
+capture_stats
+
 # ------------------------------------------------------------ assertions --
 
 section "§ 14 metrics received by the Agent"
@@ -446,6 +489,12 @@ if [[ ! -s $STATS ]]; then
   echo
   echo "  $passed passed, $failed failed"
   exit 1
+fi
+
+if [[ $(docker inspect -f '{{.State.StartedAt}}' datadog-agent 2>/dev/null) == "$agent_started" ]]; then
+  pass "the Agent was not restarted mid-run"
+else
+  fail "the Agent was not restarted mid-run (its stats store was emptied; rerun)"
 fi
 
 # One line per metric per tag set: "name | tags | count | last seen".
