@@ -15,6 +15,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 
+import redis.asyncio as aioredis
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.structs import ConsumerRecord
 
@@ -38,6 +39,7 @@ class NotificationConsumer:
         self._log = logger
         self._email = EmailClient(settings)
         self._deliverer = Deliverer(settings, self._email, chaos)
+        self._redis = aioredis.from_url(settings.redis_url, decode_responses=True)
 
         self._consumer: AIOKafkaConsumer | None = None
         self._producer: AIOKafkaProducer | None = None
@@ -186,11 +188,38 @@ class NotificationConsumer:
 
         outcome = await self._deliverer.deliver(record.value)
 
+        if outcome.kind == "sent":
+            await self._mark_sent(record.value)
+
         if outcome.kind == "dead_lettered":
             await self._dead_letter(record, outcome)
 
         self._log_outcome(record, outcome)
         self._record_metrics(record, outcome)
+
+    async def _mark_sent(self, payload: dict) -> None:
+        """Record that this booking's mail has gone out.
+
+        The confirmation page asks whether the itinerary has been sent, and
+        until now nothing anywhere could answer: mail is sent by this consumer,
+        asynchronously, and nothing about it is written down. The booking row
+        cannot say so either -- it is confirmed long before the email leaves.
+
+        Redis rather than a column because the answer only matters while the
+        traveller is still looking at the page. A day is far longer than that
+        and keeps the key count bounded on its own.
+
+        Failures are swallowed. An unreachable Redis should cost the amber
+        "your email is on its way" banner, not a redelivery of mail that has
+        already been sent.
+        """
+        booking_id = payload.get("bookingId") or payload.get("booking_id")
+        if not booking_id:
+            return
+        try:
+            await self._redis.setex(f"voyager:notifications:sent:{booking_id}", 86_400, "1")
+        except Exception:  # noqa: BLE001 - see docstring
+            self._log.warning("Could not record that mail was sent", booking_id=booking_id)
 
     async def _dead_letter(self, record: ConsumerRecord, outcome: Outcome) -> None:
         assert self._producer is not None

@@ -232,8 +232,13 @@ export function registerBffRoutes(app: FastifyInstance, deps: Deps): void {
 
     return {
       booking,
-      payment: results.payment,
+      // payment-service answers {bookingId, payment}; the client wants the
+      // payment itself. Passing the envelope through leaves every card
+      // detail one level deeper than the page looks for it.
+      payment: (results.payment as { payment?: unknown } | null)?.payment ?? null,
       loyalty: results.loyalty,
+      emailSent: await itinerarySent(deps, bookingId),
+      cancellationPolicy: cancellationPolicy(booking),
       degraded: Object.keys(failures).length > 0 ? failures : undefined,
       requestId: request.id,
     };
@@ -299,6 +304,50 @@ async function bookingByPnr(
     timeoutMs: 8000,
   });
   return found.body.bookings[0];
+}
+
+/**
+ * Whether notification-worker has sent this booking's itinerary.
+ *
+ * Mail goes out asynchronously, so a booking is confirmed well before it is
+ * delivered, and the booking row cannot answer this. The worker leaves a key
+ * behind when it sends; its absence is the amber "on its way" banner, which
+ * is the state scenario S5 exists to produce.
+ *
+ * An unreachable Redis reports "not yet" rather than failing the page. The
+ * banner is the smaller loss.
+ */
+async function itinerarySent(deps: Deps, bookingId: string): Promise<boolean> {
+  try {
+    return (await deps.redis.exists(`voyager:notifications:sent:${bookingId}`)) === 1;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * What cancelling this booking would cost.
+ *
+ * The rule has to match what booking-service actually does on cancel
+ * (services/booking-service/app/routers/bookings.py): a refundable fare
+ * returns the lot, a non-refundable one returns nothing and cancels anyway
+ * rather than erroring. A policy quoted on the review screen that a
+ * cancellation then contradicts is worse than no policy at all.
+ */
+function cancellationPolicy(booking: Record<string, unknown>): Record<string, unknown> {
+  const metadata = (booking.metadata ?? {}) as Record<string, unknown>;
+  const refundable = Boolean(metadata.refundable);
+  const total = Number(booking.totalCents ?? 0);
+  const refundCents = refundable ? total : 0;
+
+  return {
+    refundable,
+    penaltyCents: total - refundCents,
+    refundCents,
+    summary: refundable
+      ? 'Free cancellation. Cancel before departure for a full refund.'
+      : 'Non-refundable. This fare cannot be refunded if you cancel.',
+  };
 }
 
 async function popularAirports(deps: Deps): Promise<unknown[]> {
