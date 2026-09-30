@@ -134,7 +134,7 @@ section 'The API mix is exactly the documented mix'
 
 documented_mix=$(python3 -c "
 import re
-phase = open('03-EXECUTION-ORDER.md').read().split('## Phase 11')[1].split('\n## ')[0]
+phase = open('Project Requirements/03-EXECUTION-ORDER.md').read().split('## Phase 11')[1].split('\n## ')[0]
 found = dict((name.strip().replace(' ', '_'), int(rate))
              for rate, name in re.findall(r'^\s*-\s*(\d+)% (browse|deep browse|checkout|manage|cancel|support)',
                                           phase, re.M))
@@ -168,7 +168,7 @@ fi
 # The one cross-document constraint Phase 11 calls out by name.
 bottom_of_funnel=$(python3 -c "
 import re
-section = open('06-USER-FLOWS.md').read().split('## 8. Funnel definition')[1].split('\n## ')[0]
+section = open('Project Requirements/06-USER-FLOWS.md').read().split('## 8. Funnel definition')[1].split('\n## ')[0]
 print(re.findall(r'^\|\s*\d+\s*\|.*?\|\s*(\d+)%\s*\|', section, re.M)[-1])")
 assert 'the checkout weight is the bottom-of-funnel conversion in 06-USER-FLOWS.md § 8' \
   "$(MIX="$running_mix" python3 -c "
@@ -181,7 +181,7 @@ section 'The browser generator walks the § 8 funnel'
 
 documented_funnel=$(python3 -c "
 import re
-section = open('06-USER-FLOWS.md').read().split('## 8. Funnel definition')[1].split('\n## ')[0]
+section = open('Project Requirements/06-USER-FLOWS.md').read().split('## 8. Funnel definition')[1].split('\n## ')[0]
 print(','.join(re.findall(r'^\|\s*\d+\s*\|.*?\|\s*(\d+)%\s*\|', section, re.M)))")
 assert 'the funnel is still eight steps' "$(tr ',' '\n' <<< "$documented_funnel" | grep -c .)" 8
 

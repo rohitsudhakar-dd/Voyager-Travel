@@ -140,6 +140,10 @@ func (s *Server) runHotelSearch(ctx context.Context, criteria store.Criteria) (*
 			continue
 		}
 		responded++
+		for i := range outcome.Hotels {
+			outcome.Hotels[i].CheckIn = criteria.CheckIn
+			outcome.Hotels[i].CheckOut = criteria.CheckOut
+		}
 		raw = append(raw, outcome.Hotels...)
 	}
 	recordFanOut(outcomes, responded)

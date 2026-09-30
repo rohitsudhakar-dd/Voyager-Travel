@@ -42,7 +42,7 @@
     },
     {
       "definition": {
-        "type": "service_map",
+        "type": "servicemap",
         "title": "Service map — dependencies as traced",
         "service": "voyager-gateway",
         "filters": ["env:$env.value"]

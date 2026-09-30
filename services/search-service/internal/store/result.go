@@ -111,6 +111,10 @@ type HotelResult struct {
 	ReviewScore  float64     `json:"reviewScore"`
 	ReviewCount  int         `json:"reviewCount"`
 	CityName     string      `json:"cityName"`
+	// Present so checkout can re-price without asking the client for the dates
+	// again. A hotel result that omits them makes pricing reject the offer.
+	CheckIn      string      `json:"checkIn,omitempty"`
+	CheckOut     string      `json:"checkOut,omitempty"`
 	// No omitempty: the client's schema wants the key present and either a
 	// string or null, and an omitted key is neither.
 	Neighborhood string      `json:"neighborhood"`

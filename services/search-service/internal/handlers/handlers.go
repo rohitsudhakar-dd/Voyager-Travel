@@ -283,11 +283,7 @@ func (s *Server) resultDetail(w http.ResponseWriter, r *http.Request) {
 	if set.ProductType == store.Hotels {
 		for _, hotel := range set.Hotels {
 			if hotel.ID == resultID {
-				writeJSON(w, http.StatusOK, map[string]any{
-					"searchId":  set.SearchID,
-					"result":    hotel,
-					"requestId": httpx.RequestID(r.Context()),
-				})
+				writeJSON(w, http.StatusOK, hotelDetail(set.SearchID, hotel, httpx.RequestID(r.Context())))
 				return
 			}
 		}
@@ -300,12 +296,7 @@ func (s *Server) resultDetail(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		body := map[string]any{
-			"searchId":           set.SearchID,
-			"result":             flight,
-			"cancellationPolicy": cancellationPolicy(flight),
-			"requestId":          httpx.RequestID(r.Context()),
-		}
+		body := flightDetail(set.SearchID, flight, httpx.RequestID(r.Context()))
 
 		// Seat availability is a live question, so it is fetched rather than
 		// cached. A provider that will not answer must not cost the traveller
@@ -316,6 +307,7 @@ func (s *Server) resultDetail(w http.ResponseWriter, r *http.Request) {
 			cancel()
 			if err == nil {
 				body["seatmap"] = seatmap
+				body["seatMapAvailable"] = true
 			} else {
 				body["seatmap"] = nil
 			}
@@ -441,19 +433,92 @@ func sortOrDefault(order string) string {
 // ----------------------------------------------------------------- utils --
 
 func cancellationPolicy(flight store.FlightResult) map[string]any {
+	// Field names are the storefront's (penaltyCents, summary,
+	// freeCancellationUntil). The older feeCents/description names stay so a
+	// caller written against the first shape still reads a sentence.
 	if flight.Fare.Refundable {
+		var until any
+		if len(flight.Segments) > 0 {
+			until = flight.Segments[0].DepartureTime.Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+		}
+		const summary = "Cancel up to 24 hours before departure for a refund, less the cancellation fee."
 		return map[string]any{
-			"refundable":     true,
-			"freeUntilHours": 24,
-			"feeCents":       4000,
-			"description":    "Cancel up to 24 hours before departure for a refund, less the cancellation fee.",
+			"refundable":             true,
+			"penaltyCents":           4000,
+			"freeCancellationUntil":  until,
+			"summary":                summary,
+			"freeUntilHours":         24,
+			"feeCents":               4000,
+			"description":            summary,
 		}
 	}
+	const summary = "This fare is non-refundable. Taxes are returned if you cancel."
 	return map[string]any{
-		"refundable":     false,
-		"freeUntilHours": 0,
-		"feeCents":       0,
-		"description":    "This fare is non-refundable. Taxes are returned if you cancel.",
+		"refundable":            false,
+		"penaltyCents":          0,
+		"freeCancellationUntil": nil,
+		"summary":               summary,
+		"freeUntilHours":        0,
+		"feeCents":              0,
+		"description":           summary,
+	}
+}
+
+func flightDetail(searchID string, flight store.FlightResult, requestID string) map[string]any {
+	policy := cancellationPolicy(flight)
+	change := "Changes not permitted"
+	if flight.Fare.Changeable {
+		change = "Changes permitted, fare difference applies"
+	}
+	return map[string]any{
+		"searchId": searchID,
+		"result":   flight,
+		"fareRules": []map[string]string{
+			{"label": "Fare", "value": flight.Fare.Basis},
+			{"label": "Cabin", "value": flight.Fare.Cabin},
+			{"label": "Changes", "value": change},
+			{"label": "Refunds", "value": policy["summary"].(string)},
+		},
+		"baggageAllowance": map[string]any{
+			"cabinBags":       1,
+			"checkedBags":     flight.Fare.BaggageAllowance,
+			"checkedWeightKg": 23,
+		},
+		"cancellationPolicy": policy,
+		"seatMapAvailable":   false,
+		"requestId":          requestID,
+	}
+}
+
+func hotelDetail(searchID string, hotel store.HotelResult, requestID string) map[string]any {
+	summary := "This rate is non-refundable."
+	if hotel.Refundable {
+		summary = "Free cancellation until the property's stated deadline."
+	}
+	breakfast := "Breakfast not included"
+	if hotel.BreakfastIncluded {
+		breakfast = "Breakfast included"
+	}
+	return map[string]any{
+		"searchId": searchID,
+		"result":   hotel,
+		"fareRules": []map[string]string{
+			{"label": "Room", "value": hotel.RoomName},
+			{"label": "Rate", "value": hotel.RatePlanName},
+			{"label": "Breakfast", "value": breakfast},
+			{"label": "Refunds", "value": summary},
+		},
+		"baggageAllowance": map[string]any{
+			"cabinBags": 0, "checkedBags": 0, "checkedWeightKg": 0,
+		},
+		"cancellationPolicy": map[string]any{
+			"refundable":            hotel.Refundable,
+			"penaltyCents":          0,
+			"freeCancellationUntil": nil,
+			"summary":               summary,
+		},
+		"seatMapAvailable": false,
+		"requestId":        requestID,
 	}
 }
 

@@ -597,12 +597,13 @@ Container logging must stay on the `json-file` driver with a size cap, and the s
 ```
 voyager/
 ├── README.md                     ← start here
-├── 01-PRD.md
-├── 02-TECH-STACK.md
-├── 03-EXECUTION-ORDER.md
-├── 04-STYLING.md
-├── 05-FUNCTIONALITY.md
-├── 06-USER-FLOWS.md
+├── Project Requirements/
+│   ├── 01-PRD.md
+│   ├── 02-TECH-STACK.md
+│   ├── 03-EXECUTION-ORDER.md
+│   ├── 04-STYLING.md
+│   ├── 05-FUNCTIONALITY.md
+│   └── 06-USER-FLOWS.md
 ├── Makefile
 ├── docker-compose.yml            ← base: app + data + agent
 ├── docker-compose.loadgen.yml    ← overlay: load generators

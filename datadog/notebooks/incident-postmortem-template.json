@@ -508,7 +508,6 @@
           "type": "notebook_cells",
           "attributes": {
             "graph_size": "l",
-            "split_by": { "keys": [], "tags": [] },
             "definition": {
               "type": "log_stream",
               "title": "Errors and warnings across all services",

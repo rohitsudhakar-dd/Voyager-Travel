@@ -73,29 +73,27 @@ if [[ $dry_run == false ]]; then
     exit 1
   fi
 
-  # Both keys are fixed-length lowercase hex. Checking that here turns the
-  # commonest paste mistake into a sentence that names it, instead of an HTTP
-  # 401 whose own wording blames the API key -- which sends an operator to
-  # rotate the one credential that was never wrong. The key itself is never
-  # echoed; only its length and whether it is hex.
+  # API keys are still 32 hex characters. Application keys are either the
+  # legacy 40-character hex form or the current `ddapp_` form (prefix plus 34
+  # alphanumeric characters). Datadog's own agent accepts both; see
+  # pkg/privateactionrunner/util/keys.go. Rejecting the new form here produced
+  # a local error that looked like a bad paste, before any request was sent.
+  # The key itself is never echoed.
   key_shape() {
-    local name=$1 value=$2 want=$3
-    if [[ ${#value} -ne $want ]]; then
-      echo "$name is ${#value} characters; a Datadog $4 is $want." >&2
-      return 1
-    fi
-    if [[ ! $value =~ ^[0-9a-f]+$ ]]; then
-      echo "$name is the right length but is not lowercase hexadecimal." >&2
-      echo "That usually means the value came from the key list rather than the" >&2
-      echo "key itself -- the list shows a masked form. Reveal the full key and" >&2
-      echo "copy that." >&2
+    local name=$1 value=$2 pattern=$3 hint=$4
+    if [[ ! $value =~ $pattern ]]; then
+      echo "$name does not match a Datadog $hint." >&2
+      echo "Copy the secret from the creation dialog. The key list only shows" >&2
+      echo "the name and the last four characters, and that masked value will" >&2
+      echo "not authenticate." >&2
       return 1
     fi
   }
 
   shape_ok=true
-  key_shape DD_API_KEY "$DD_API_KEY" 32 "API key" || shape_ok=false
-  key_shape DD_APP_KEY "$DD_APP_KEY" 40 "application key" || shape_ok=false
+  key_shape DD_API_KEY "$DD_API_KEY" '^[a-fA-F0-9]{32}$' "API key (32 hex characters)" || shape_ok=false
+  key_shape DD_APP_KEY "$DD_APP_KEY" '^([a-f0-9]{40}|ddapp_[a-zA-Z0-9]{34})$' \
+    "application key (40 hex characters, or ddapp_ plus 34 characters)" || shape_ok=false
   if [[ $shape_ok == false ]]; then
     echo >&2
     echo "Application keys live under Organisation Settings -> Application Keys," >&2

@@ -13,6 +13,20 @@
     "env:demo"
   ],
   "config": {
+    "configVariables": [
+      {
+        "name": "DEPART_DATE",
+        "type": "text",
+        "pattern": "{{ date(30d, YYYY-MM-DD) }}",
+        "example": "2026-11-01"
+      },
+      {
+        "name": "RETURN_DATE",
+        "type": "text",
+        "pattern": "{{ date(37d, YYYY-MM-DD) }}",
+        "example": "2026-11-08"
+      }
+    ],
     "request": {
       "method": "POST",
       "url": "https://{{PUBLIC_HOSTNAME}}/api/v1/search/flights",
@@ -21,7 +35,7 @@
         "Content-Type": "application/json",
         "Accept": "application/json"
       },
-      "body": "{\"origin\":\"LHR\",\"destination\":\"JFK\",\"departDate\":\"{{ date(30d, YYYY-MM-DD) }}\",\"returnDate\":\"{{ date(37d, YYYY-MM-DD) }}\",\"passengers\":{\"adults\":1,\"children\":0,\"infants\":0},\"cabin\":\"economy\",\"sort\":\"price_asc\"}",
+      "body": "{\"origin\":\"LHR\",\"destination\":\"JFK\",\"departDate\":\"{{ DEPART_DATE }}\",\"returnDate\":\"{{ RETURN_DATE }}\",\"passengers\":{\"adults\":1,\"children\":0,\"infants\":0},\"cabin\":\"economy\",\"sort\":\"price_asc\"}",
       "bodyType": "application/json"
     },
     "assertions": [

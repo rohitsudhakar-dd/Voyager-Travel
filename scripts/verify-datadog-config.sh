@@ -98,9 +98,9 @@ def part(text, heading, stop):
     return text[start:text.index(stop, start)]
 
 
-functionality = read("05-FUNCTIONALITY.md")
-flows = read("06-USER-FLOWS.md")
-order = read("03-EXECUTION-ORDER.md")
+functionality = read("Project Requirements/05-FUNCTIONALITY.md")
+flows = read("Project Requirements/06-USER-FLOWS.md")
+order = read("Project Requirements/03-EXECUTION-ORDER.md")
 compose = read("docker-compose.yml")
 
 # § 14 is the metric catalogue; every name appears in backticks.
@@ -173,7 +173,7 @@ import os
 import re
 import sys
 
-with open("02-TECH-STACK.md", encoding="utf-8") as handle:
+with open("Project Requirements/02-TECH-STACK.md", encoding="utf-8") as handle:
     text = handle.read()
 start = text.index("### 5.2 Entry-point span names")
 table = text[start:text.index("### 5.3", start)]
@@ -480,6 +480,12 @@ assert_none 'every voyager.* metric in a query is in the § 14 catalogue' \
 assert_at_least 'voyager.* metrics are actually being queried' "$(count "$tmp/used-metrics")" 20
 assert_none 'every Datadog integration metric was verified against integrations-core' \
   "$(comm -23 "$tmp/used-integration-metrics" "$tmp/cat-integration-metrics")"
+
+# The reverse direction. A metric the services go to the trouble of emitting and
+# that no dashboard ever draws is wasted instrumentation nobody will notice is
+# wasted, so the catalogue and the dashboards are held to agree both ways.
+assert_none 'every § 14 metric appears on at least one dashboard or monitor' \
+  "$(comm -13 "$tmp/used-metrics" "$tmp/cat-metrics")"
 
 section 'Span names'
 assert 'all three runtimes have an entry span in 02-TECH-STACK.md § 5.2' "$(count "$tmp/cat-entry-spans")" 3

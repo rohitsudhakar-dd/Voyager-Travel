@@ -398,7 +398,7 @@
             "values": [{ "type": "css", "value": "[data-testid='confirmation-pnr-value']" }]
           }
         },
-        "check": "matches",
+        "check": "matchRegex",
         "value": "^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$"
       }
     }

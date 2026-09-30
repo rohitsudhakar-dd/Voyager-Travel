@@ -148,6 +148,9 @@ pass "agent dogstatsd-stats is available"
 # Checked again at the end. Anything that restarts the Agent mid-run empties the
 # stats store, and the result reads exactly like instrumentation that never
 # fired -- which is what happened on the run this guard was written for.
+# `docker restart` can return while StartedAt still names the previous process.
+# Reading it in that window makes this guard fail on the script's own restart.
+sleep 2
 agent_started=$(docker inspect -f '{{.State.StartedAt}}' datadog-agent 2>/dev/null)
 
 : >"$STATS"
@@ -375,6 +378,14 @@ if [[ -n $USER_ID ]]; then
 fi
 
 capture_stats
+
+# The worker delivers tens of seconds behind the booking. Arming the rejection
+# flag while those receipts are still queued dead-letters every one of them,
+# and voyager.notifications.sent never fires.
+note "waiting for a confirmation email to be accepted"
+if ! capture_until voyager.notifications.sent 150; then
+  fail "confirmation email accepted before the rejection flag is armed"
+fi
 
 # ------------------------------------------------- provider and DLQ errors --
 

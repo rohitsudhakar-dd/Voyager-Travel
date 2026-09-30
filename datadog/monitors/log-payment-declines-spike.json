@@ -22,7 +22,6 @@
     "notify_audit": false,
     "notify_no_data": false,
     "include_tags": true,
-    "renotify_interval": 0,
-    "new_group_delay": 60
+    "renotify_interval": 0
   }
 }

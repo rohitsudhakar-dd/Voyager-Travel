@@ -114,7 +114,7 @@ assert 'the catalogue serves 38 flags' "$served" 38
 missing=$(python3 -c "
 import json, re
 served = {f['name'] for f in json.load(open('/tmp/voyager-g-flags.json'))['flags']}
-doc = open('05-FUNCTIONALITY.md').read()
+doc = open('Project Requirements/05-FUNCTIONALITY.md').read()
 section = doc.split('## 11.')[1].split('\n## ')[0]
 named = set(re.findall(r'^\| \`([a-z0-9_]+)\`', section, re.M))
 print(','.join(sorted(named ^ served)) or 'none')")

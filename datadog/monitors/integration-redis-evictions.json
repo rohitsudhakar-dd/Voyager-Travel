@@ -21,7 +21,6 @@
     "include_tags": true,
     "require_full_window": false,
     "evaluation_delay": 60,
-    "renotify_interval": 0,
-    "new_group_delay": 60
+    "renotify_interval": 0
   }
 }

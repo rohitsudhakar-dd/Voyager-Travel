@@ -14,6 +14,20 @@
   ],
   "config": {
     "assertions": [],
+    "configVariables": [
+      {
+        "name": "DEPART_DATE",
+        "type": "text",
+        "pattern": "{{ date(30d, YYYY-MM-DD) }}",
+        "example": "2026-11-01"
+      },
+      {
+        "name": "IDEMPOTENCY_KEY",
+        "type": "text",
+        "pattern": "synthetic-{{ uuid }}",
+        "example": "synthetic-00000000-0000-4000-8000-000000000000"
+      }
+    ],
     "steps": [
       {
         "name": "Search flights",
@@ -28,7 +42,7 @@
             "Content-Type": "application/json",
             "Accept": "application/json"
           },
-          "body": "{\"origin\":\"LHR\",\"destination\":\"CDG\",\"departDate\":\"{{ date(30d, YYYY-MM-DD) }}\",\"passengers\":{\"adults\":1,\"children\":0,\"infants\":0},\"cabin\":\"economy\",\"sort\":\"price_asc\"}",
+          "body": "{\"origin\":\"LHR\",\"destination\":\"CDG\",\"departDate\":\"{{ DEPART_DATE }}\",\"passengers\":{\"adults\":1,\"children\":0,\"infants\":0},\"cabin\":\"economy\",\"sort\":\"price_asc\"}",
           "bodyType": "application/json"
         },
         "assertions": [
@@ -110,7 +124,7 @@
           {
             "type": "body",
             "operator": "validatesJSONPath",
-            "target": { "jsonPath": "$.holdExpiresAt", "operator": "isNot", "targetValue": null }
+            "target": { "jsonPath": "$.holdExpiresAt", "operator": "matches", "targetValue": "^\\d{4}-\\d{2}-\\d{2}T" }
           }
         ],
         "extractedValues": [
@@ -156,9 +170,9 @@
           "headers": {
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "Idempotency-Key": "synthetic-{{ uuid }}"
+            "Idempotency-Key": "{{ IDEMPOTENCY_KEY }}"
           },
-          "body": "{\"bookingId\":\"{{ BOOKING_ID }}\",\"amount\":{{ TOTAL_CENTS }},\"currency\":\"{{ CURRENCY }}\",\"card\":{\"number\":\"4242424242424242\",\"expiryMonth\":11,\"expiryYear\":2030,\"cvc\":\"123\",\"holderName\":\"Synthetic Traveller\",\"billingCountry\":\"GB\"},\"idempotencyKey\":\"synthetic-{{ uuid }}\"}",
+          "body": "{\"bookingId\":\"{{ BOOKING_ID }}\",\"amount\":{{ TOTAL_CENTS }},\"currency\":\"{{ CURRENCY }}\",\"card\":{\"number\":\"4242424242424242\",\"expiryMonth\":11,\"expiryYear\":2030,\"cvc\":\"123\",\"holderName\":\"Synthetic Traveller\",\"billingCountry\":\"GB\"},\"idempotencyKey\":\"{{ IDEMPOTENCY_KEY }}\"}",
           "bodyType": "application/json"
         },
         "assertions": [

@@ -15,20 +15,20 @@ A production-shaped online travel agency built to demonstrate the full Datadog p
 | Doc | What it is | When you need it |
 |---|---|---|
 | **README.md** (this file) | Orientation, quickstart, deployment, troubleshooting | First, then whenever you deploy |
-| **01-PRD.md** | Goals, scope, Datadog coverage matrix, chaos scenarios, success criteria | Read fully before writing anything. Don't code from it. |
-| **02-TECH-STACK.md** | Every version, port, service name, env var, repo path | **The canonical reference.** When docs disagree, this wins. |
-| **03-EXECUTION-ORDER.md** | The 14-phase build plan with exit criteria | **Your work queue.** Follow it strictly, in order. |
-| **04-STYLING.md** | Design tokens, components, accessibility, instrumentation markup hooks | Phase 7 and whenever you touch UI |
-| **05-FUNCTIONALITY.md** | API contracts, data model, state machines, chaos flags, log schema, error types, metrics | **The doc you'll open most.** Every name and contract lives here. |
-| **06-USER-FLOWS.md** | Screens, routes, RUM taxonomy, funnel, demo runbooks | Phases 7, 9, and 13 |
+| **Project Requirements/01-PRD.md** | Goals, scope, Datadog coverage matrix, chaos scenarios, success criteria | Read fully before writing anything. Don't code from it. |
+| **Project Requirements/02-TECH-STACK.md** | Every version, port, service name, env var, repo path | **The canonical reference.** When docs disagree, this wins. |
+| **Project Requirements/03-EXECUTION-ORDER.md** | The 14-phase build plan with exit criteria | **Your work queue.** Follow it strictly, in order. |
+| **Project Requirements/04-STYLING.md** | Design tokens, components, accessibility, instrumentation markup hooks | Phase 7 and whenever you touch UI |
+| **Project Requirements/05-FUNCTIONALITY.md** | API contracts, data model, state machines, chaos flags, log schema, error types, metrics | **The doc you'll open most.** Every name and contract lives here. |
+| **Project Requirements/06-USER-FLOWS.md** | Screens, routes, RUM taxonomy, funnel, demo runbooks | Phases 7, 9, and 13 |
 
 ### Reading order for the first pass
 
 1. This section.
-2. `01-PRD.md` — all of it. Understand the *why* before the *what*.
-3. `02-TECH-STACK.md` — all of it. Memorize the service/port table.
-4. `03-EXECUTION-ORDER.md` § Phase 0, then start Phase 0.
-5. From then on: read each phase, read the sections of `05-FUNCTIONALITY.md` it cites, build, verify against the exit criteria, commit.
+2. `Project Requirements/01-PRD.md` — all of it. Understand the *why* before the *what*.
+3. `Project Requirements/02-TECH-STACK.md` — all of it. Memorize the service/port table.
+4. `Project Requirements/03-EXECUTION-ORDER.md` § Phase 0, then start Phase 0.
+5. From then on: read each phase, read the sections of `Project Requirements/05-FUNCTIONALITY.md` it cites, build, verify against the exit criteria, commit.
 
 ### Rules that apply to every phase
 

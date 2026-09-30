@@ -16,8 +16,8 @@
           "query": "sum:voyager.booking.failed{env:demo}.as_count()"
         }
       ],
-      "good_events_formula": "good",
-      "bad_events_formula": "bad"
+      "good_events_formula": { "formula": "good" },
+      "bad_events_formula": { "formula": "bad" }
     }
   },
   "thresholds": [
