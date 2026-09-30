@@ -327,7 +327,12 @@ else
   }
 
   admin_reset; sleep 3
-  before=$(item_reads); mine >/dev/null; sleep 1; joined=$(( $(item_reads) - before ))
+  before=$(item_reads)
+  # Checked here as well as with the flag on. A baseline request the gateway
+  # rejects reads back as join=0, which looks like a join that issues no
+  # queries rather than a request that never reached the database.
+  assert 'the endpoint answers 200 with no flag set' "$(mine)" 200
+  sleep 1; joined=$(( $(item_reads) - before ))
 
   admin_put '{"db_n_plus_one":true}'; sleep 3
   assert 'the endpoint still answers 200 with the flag on' "$(mine)" 200
