@@ -165,6 +165,38 @@ export async function runSession(browser: Browser, shouldStop: () => boolean): P
 }
 
 /**
+ * Whether the origin serving the page also answers its API calls.
+ *
+ * Behind the edge it does, and those calls have to keep going through it or
+ * Caddy stops seeing the traffic a real session makes. Pointed straight at
+ * web-ui -- the laptop default, because the edge holds a certificate for the
+ * public hostname and not for the name this container would have to dial --
+ * it does not. web-ui serves the SPA for every path it does not recognise,
+ * so an API call comes back as the index page under a 200, and the page
+ * cannot tell that from an empty answer. It shows as "No matches" in the
+ * airport field, and no session ever reaches a results page.
+ *
+ * Probed rather than configured because the answer is a property of wherever
+ * WEB_BASE_URL happens to point, and a flag for it is one more thing to set
+ * correctly in two environments.
+ */
+let originApiProbe: Promise<boolean> | undefined;
+
+function originServesApi(): Promise<boolean> {
+  originApiProbe ??= (async () => {
+    try {
+      const response = await fetch(`${BASE_URL}/api/v1/ref/airports?q=LHR`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      return (response.headers.get('content-type') ?? '').includes('application/json');
+    } catch {
+      return false;
+    }
+  })();
+  return originApiProbe;
+}
+
+/**
  * Vite bakes `VITE_API_BASE_URL` into the bundle at build time, and the demo
  * builds it as the public origin a person's browser uses. That origin does
  * not resolve from inside the compose network, so every API call the page
@@ -181,7 +213,7 @@ async function forwardApiToGateway(context: BrowserContext): Promise<void> {
   await context.route('**/api/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    if (url.origin === UI_ORIGIN) return route.continue();
+    if (url.origin === UI_ORIGIN && (await originServesApi())) return route.continue();
 
     const headers = { ...request.headers() };
     delete headers.host;

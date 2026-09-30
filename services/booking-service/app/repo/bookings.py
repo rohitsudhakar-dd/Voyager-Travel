@@ -64,7 +64,7 @@ async def create_draft(
     total_cents: int,
     search_id: str,
     result_id: str,
-    contact_email: str,
+    contact_email: str | None,
     contact_phone: str | None,
     metadata: dict,
     items: list[dict],
@@ -347,6 +347,27 @@ async def set_hold_expiry(
         {"id": UUID(booking_id), "expires_at": expires_at},
     )
     return expires_at
+
+
+async def set_contact_details(
+    db: AsyncSession, *, booking_id: str, contact_email: str, contact_phone: str | None
+) -> dict:
+    """Record who to send the itinerary to.
+
+    A draft is created before anyone has been asked for an address, so this is
+    the point at which a booking becomes deliverable. Returns the updated row
+    because the caller reports the booking back to the client, and a response
+    still showing the old (usually empty) address reads as a save that did not
+    happen.
+    """
+    await db.execute(
+        text(
+            "UPDATE bookings SET contact_email = :email, contact_phone = :phone, "
+            "updated_at = now() WHERE id = :id"
+        ),
+        {"id": UUID(booking_id), "email": contact_email, "phone": contact_phone},
+    )
+    return await get(db, booking_id)
 
 
 async def issue_pnr(db: AsyncSession, booking_id: str, *, attempts: int = 5) -> str:

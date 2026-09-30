@@ -36,7 +36,11 @@ class CreateBooking(BaseModel):
     searchId: str
     resultId: str
     userId: str | None = None
-    contactEmail: EmailStr
+    # Optional because a draft is created the moment a traveller picks a
+    # result (06-USER-FLOWS.md step 5) and nothing has asked them for an
+    # address yet -- the passenger step does, three screens later. A signed-in
+    # traveller has one already, so the gateway sends it when it can.
+    contactEmail: EmailStr | None = None
     contactPhone: str | None = None
     passengerCounts: dict[str, int] = Field(
         default_factory=lambda: {"adult": 1, "child": 0, "infant": 0}
@@ -57,6 +61,10 @@ class Passenger(BaseModel):
 
 class SetPassengers(BaseModel):
     passengers: list[Passenger]
+    # Where the contact details are actually collected. Accepting them here
+    # and dropping them would confirm a booking with nobody to send it to.
+    contactEmail: EmailStr
+    contactPhone: str | None = None
 
 
 class Ancillary(BaseModel):
@@ -86,7 +94,10 @@ async def create_booking(body: CreateBooking) -> dict:
     the difference between a booking system and a tip jar.
     """
     offer = await clients.fetch_search_result(body.searchId, body.resultId)
-    fare = offer["fare"]
+    if offer.get("productType") == "hotel":
+        return await _create_hotel_booking(body, offer)
+
+    fare = offer.get("fare") or {}
 
     total_people = sum(body.passengerCounts.get(k, 0) for k in ("adult", "child", "infant"))
     if not 1 <= total_people <= validation.MAX_PASSENGERS:
@@ -95,8 +106,14 @@ async def create_booking(body: CreateBooking) -> dict:
             details={"submitted": total_people},
         )
 
-    base_cents = (fare["baseAmountCents"] + fare["adjustmentsCents"]) * total_people
-    taxes_cents = fare["taxesCents"] * total_people
+    # Search results use baseCents / fareClassCode / departAt. Older payloads
+    # used baseAmountCents / basis / departureTime. Accept both so a cached
+    # result from either shape can still be booked.
+    base_unit = int(fare.get("baseCents", fare.get("baseAmountCents", 0)))
+    adjustments = int(fare.get("adjustmentsCents", 0))
+    unit_cents = base_unit + adjustments
+    base_cents = unit_cents * total_people
+    taxes_cents = int(fare.get("taxesCents", 0)) * total_people
 
     # Read once, here, and carried on the booking from now on. The `tier` tag on
     # every later booking metric comes off this snapshot, and the confirmation
@@ -108,10 +125,10 @@ async def create_booking(body: CreateBooking) -> dict:
         {
             "item_type": "flight_segment",
             "flight_id": int(segment["flightId"]) if segment.get("flightId") else None,
-            "fare_class_code": fare.get("basis"),
+            "fare_class_code": fare.get("fareClassCode") or fare.get("basis"),
             "description": _segment_description(offer, segment),
             "quantity": total_people,
-            "unit_price_cents": fare["baseAmountCents"] + fare["adjustmentsCents"],
+            "unit_price_cents": unit_cents,
             "total_price_cents": base_cents,
             "item_metadata": {
                 "provider": offer.get("provider"),
@@ -132,16 +149,16 @@ async def create_booking(body: CreateBooking) -> dict:
             total_cents=base_cents + taxes_cents,
             search_id=body.searchId,
             result_id=body.resultId,
-            contact_email=str(body.contactEmail),
+            contact_email=str(body.contactEmail) if body.contactEmail else None,
             contact_phone=body.contactPhone,
             metadata={
                 "passengerCounts": body.passengerCounts,
                 "userTier": tier,
-                "departDate": segment.get("departureTime", "")[:10],
+                "departDate": str(segment.get("departAt") or segment.get("departureTime") or "")[:10],
                 "origin": segment.get("origin"),
                 "destination": segment.get("destination"),
                 "cabin": fare.get("cabin"),
-                "fareClassCode": fare.get("basis"),
+                "fareClassCode": fare.get("fareClassCode") or fare.get("basis"),
                 "refundable": fare.get("refundable", False),
             },
             items=items,
@@ -165,6 +182,71 @@ async def create_booking(body: CreateBooking) -> dict:
             "total_cents": booking["total_cents"],
         },
     )
+    return _public(booking, items=await _items(booking["id"]))
+
+
+async def _create_hotel_booking(body: CreateBooking, offer: dict) -> dict:
+    """A hotel draft from a search result.
+
+    The stay total is already the quoted price for the whole stay, so it is
+    not multiplied by the guest count the way a per-person airfare is.
+    """
+    nights = max(int(offer.get("nights") or 1), 1)
+    total_cents = int(offer.get("totalCents") or 0)
+    taxes_cents = int(offer.get("taxesCents") or 0)
+    subtotal_cents = max(total_cents - taxes_cents, 0)
+    rate_id = None
+    rates = offer.get("rates") or []
+    raw_rate = str((rates[0] or {}).get("ratePlanId", "")) if rates else ""
+    if raw_rate.isdigit():
+        rate_id = int(raw_rate)
+
+    tier = await metrics.lookup_tier(body.userId)
+    items = [
+        {
+            "item_type": "room_night",
+            "rate_plan_id": rate_id,
+            "description": f"{offer.get('name', 'Hotel')} — {offer.get('roomName', 'Room')}",
+            "quantity": nights,
+            "unit_price_cents": subtotal_cents // nights,
+            "total_price_cents": subtotal_cents,
+            "item_metadata": {"provider": offer.get("provider")},
+        }
+    ]
+
+    async with db.transaction() as session:
+        booking = await booking_repo.create_draft(
+            session,
+            user_id=body.userId,
+            product_type="hotel",
+            currency=str(offer.get("currency") or "GBP"),
+            subtotal_cents=subtotal_cents,
+            taxes_cents=taxes_cents,
+            total_cents=total_cents,
+            search_id=body.searchId,
+            result_id=body.resultId,
+            contact_email=str(body.contactEmail) if body.contactEmail else None,
+            contact_phone=body.contactPhone,
+            metadata={
+                "passengerCounts": body.passengerCounts,
+                "userTier": tier,
+                "checkIn": offer.get("checkIn"),
+                "checkOut": offer.get("checkOut"),
+                "city": offer.get("cityName"),
+                "refundable": offer.get("refundable", False),
+            },
+            items=items,
+        )
+
+    await runtime.producer.send(
+        envelope.TOPIC_BOOKINGS,
+        booking["id"],
+        "booking.created",
+        envelope.booking_payload(booking),
+        correlation_id=current_request_id(),
+    )
+    tracing.tag_booking(booking)
+    metrics.booking_created(product="hotel", tier=tier)
     return _public(booking, items=await _items(booking["id"]))
 
 
@@ -254,6 +336,12 @@ async def set_passengers(booking_id: str, body: SetPassengers) -> dict:
 
         await booking_repo.replace_passengers(
             session, booking_id=booking_id, passengers=submitted
+        )
+        booking = await booking_repo.set_contact_details(
+            session,
+            booking_id=booking_id,
+            contact_email=str(body.contactEmail),
+            contact_phone=body.contactPhone,
         )
 
     tracing.tag_booking(booking)
@@ -565,6 +653,10 @@ async def _items(booking_id: str) -> list[dict]:
     async with db.session() as session:
         return [
             {
+                "id": item["id"],
+                "itemType": item["item_type"],
+                # Kept alongside itemType: notification templates still accept
+                # either name, and dropping it would blank itineraries.
                 "type": item["item_type"],
                 "description": item["description"],
                 "quantity": item["quantity"],
@@ -597,9 +689,11 @@ def _public(
         "searchId": booking.get("search_id"),
         "resultId": booking.get("result_id"),
         "contactEmail": booking["contact_email"],
+        "contactPhone": booking.get("contact_phone"),
         "holdExpiresAt": booking.get("hold_expires_at"),
         "confirmedAt": booking.get("confirmed_at"),
         "cancelledAt": booking.get("cancelled_at"),
+        "cancellationReason": booking.get("cancellation_reason"),
         "createdAt": booking.get("created_at"),
         "metadata": booking.get("metadata") or {},
     }

@@ -24,8 +24,16 @@ export function registerReferenceRoutes(app: FastifyInstance, deps: Deps): void 
       const { rows } = await deps.pool.query(
         // The city name lives on `cities`, not on `airports`, so the join is
         // not optional: an autocomplete that cannot match "London" is useless.
-        `SELECT a.iata_code AS code, a.name, c.name AS city,
-                a.country_code AS country, a.timezone
+        // Aliases are the client's field names, not the column names. The
+        // browser validates this payload, and a renamed field is not a
+        // degraded autocomplete -- it is an autocomplete that says "No
+        // matches" to every query, with a successful 200 behind it.
+        //
+        // COALESCE because the join below is a LEFT join: an airport with no
+        // city row would otherwise send null for a field the client requires.
+        `SELECT a.iata_code AS "iataCode", a.name,
+                COALESCE(c.name, '') AS "cityName",
+                a.country_code AS "countryCode", a.timezone
          FROM voyager.airports a
          LEFT JOIN voyager.cities c ON c.id = a.city_id
          WHERE $1 = ''
@@ -59,7 +67,7 @@ export function registerReferenceRoutes(app: FastifyInstance, deps: Deps): void 
 
     return cached(deps, key, config.referenceCache.airportsTtlSeconds, async () => {
       const { rows } = await deps.pool.query(
-        `SELECT c.id, c.name, c.country_code AS country, c.region,
+        `SELECT c.id, c.name, c.country_code AS "countryCode", c.region,
                 c.popularity_rank AS "popularityRank"
          FROM voyager.cities c
          WHERE $1 = '' OR c.name ILIKE $1 || '%'
@@ -76,12 +84,31 @@ export function registerReferenceRoutes(app: FastifyInstance, deps: Deps): void 
   app.get('/api/v1/ref/airlines', async () =>
     cached(deps, 'ref:airlines', config.referenceCache.airlinesTtlSeconds, async () => {
       const { rows } = await deps.pool.query(
-        `SELECT iata_code AS code, name, alliance
+        `SELECT iata_code AS "iataCode", name, alliance
          FROM voyager.airlines ORDER BY name`,
       );
-      return { airlines: rows };
+      return {
+        airlines: rows.map((row) => ({ ...row, logoSeed: logoSeed(row.iataCode) })),
+      };
     }),
   );
+}
+
+/**
+ * Picks one of the generated crest designs for a carrier.
+ *
+ * Must stay identical to `logoSeed` in the search service
+ * (services/search-service/internal/store/result.go). The two run over the
+ * same carriers, and a filter chip whose crest does not match the result row
+ * beside it looks like a rendering bug. FNV-1a, so that ZP and PZ do not
+ * collide onto one design.
+ */
+function logoSeed(code: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < code.length; i += 1) {
+    hash = Math.imul(hash ^ code.charCodeAt(i), 16777619) >>> 0;
+  }
+  return hash % 1000;
 }
 
 function clamp(raw: string | undefined, fallback: number): number {

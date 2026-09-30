@@ -79,10 +79,13 @@ export function registerBffRoutes(app: FastifyInstance, deps: Deps): void {
     }
 
     const principal = principalOf(request);
+    // Not required here. Selecting a result is the first step of checkout and
+    // nothing has asked a guest for an address yet -- the passenger step does,
+    // and PUT /bookings/{id}/passengers is what records it. Demanding one now
+    // fails every guest checkout at the moment of selection, which the
+    // traveller sees as a result that simply refuses to be picked.
     const contactEmail = String(body.contactEmail ?? principal?.email ?? '');
-    if (!contactEmail.includes('@')) {
-      throw new ValidationError('A contact email is required.');
-    }
+    const contact = contactEmail.includes('@') ? contactEmail : undefined;
 
     // 1. The offer still exists. Search results live 120 seconds, and a
     //    traveller who wandered off mid-checkout needs telling, not a booking
@@ -92,10 +95,13 @@ export function registerBffRoutes(app: FastifyInstance, deps: Deps): void {
       requestId: request.id,
       timeoutMs: 5000,
     });
-    const quotedFare = (offer.body.result as Record<string, Record<string, number>>).fare;
+    const quotedFare = (offer.body.result.fare ?? {}) as Record<string, number>;
 
     // 2. Re-price it. Prices move, and a price that moved is a real UX state
-    //    rather than an error.
+    //    rather than an error. The search result and the pricing quote do not
+    //    share field names: the result says totalCents, the quote says
+    //    totalAmountCents. Comparing the quote's name against the result
+    //    reads undefined and rejects every checkout.
     const repriced = await callService<{ quotes: Array<Record<string, number>> }>(
       'pricing',
       {
@@ -107,8 +113,9 @@ export function registerBffRoutes(app: FastifyInstance, deps: Deps): void {
       },
     );
     const quote = repriced.body.quotes?.[0];
-    const priceChanged =
-      quote !== undefined && quote.totalAmountCents !== quotedFare.totalAmountCents;
+    const quotedTotal = Number(quotedFare.totalCents ?? quotedFare.totalAmountCents ?? 0);
+    const currentTotal = Number(quote?.totalAmountCents ?? quotedTotal);
+    const priceChanged = quote !== undefined && currentTotal !== quotedTotal;
 
     // 3. Create the draft.
     const created = await callService<Record<string, unknown>>('booking', {
@@ -118,7 +125,7 @@ export function registerBffRoutes(app: FastifyInstance, deps: Deps): void {
         searchId,
         resultId,
         userId: principal?.id ?? null,
-        contactEmail,
+        contactEmail: contact ?? null,
         contactPhone: body.contactPhone ?? null,
         passengerCounts: body.passengerCounts ?? { adult: 1, child: 0, infant: 0 },
       },
@@ -166,14 +173,24 @@ export function registerBffRoutes(app: FastifyInstance, deps: Deps): void {
       pointsPreview = null;
     }
 
+    const pointsToEarn =
+      pointsPreview && typeof pointsPreview === 'object'
+        ? Number((pointsPreview as { pointsToEarn?: number }).pointsToEarn ?? 0)
+        : 0;
+
     reply.code(201);
     return {
-      booking: held.body,
+      booking: {
+        ...created.body,
+        ...held.body,
+        items: held.body.items ?? created.body.items ?? [],
+        passengers: held.body.passengers ?? created.body.passengers ?? [],
+      },
+      offer: offer.body.result,
       holdExpiresAt: held.body.holdExpiresAt,
       priceChanged,
-      quotedTotalCents: quotedFare.totalAmountCents,
-      currentTotalCents: quote?.totalAmountCents ?? quotedFare.totalAmountCents,
-      pointsPreview,
+      previousTotalCents: priceChanged ? quotedTotal : null,
+      pointsPreview: pointsToEarn,
       requestId: request.id,
     };
   });
@@ -289,8 +306,10 @@ async function popularAirports(deps: Deps): Promise<unknown[]> {
   // count would mean grouping 150k flight rows on every home-page load, which
   // is a lot of work for a widget that changes about once a quarter.
   const { rows } = await deps.pool.query(
-    `SELECT a.iata_code AS code, a.name, c.name AS city,
-            a.country_code AS country, c.popularity_rank AS "popularityRank"
+      // Same client field names as /v1/ref/airports: the home page validates
+      // this list against the very same schema.
+      `SELECT a.iata_code AS "iataCode", a.name, c.name AS "cityName",
+              a.country_code AS "countryCode", c.popularity_rank AS "popularityRank"
      FROM voyager.airports a
      JOIN voyager.cities c ON c.id = a.city_id
      WHERE c.popularity_rank IS NOT NULL
@@ -322,18 +341,34 @@ function priceRequest(
   offer: Record<string, unknown>,
   body: Record<string, unknown>,
 ): Record<string, unknown> {
-  const fare = offer.fare as Record<string, unknown>;
-  const segment = ((offer.segments as Record<string, unknown>[]) ?? [{}])[0];
+  // Search results use the storefront names (fareClassCode, baseCents).
+  // Pricing still speaks baseAmountCents and fareClass. Sending the result's
+  // names makes pricing reject the offer and checkout never starts.
+  if (offer.productType === 'hotel') {
+    return {
+      id: String(offer.id),
+      productType: 'hotel',
+      destination: offer.cityName,
+      departDate: offer.checkIn ?? body.checkIn,
+      fareClass: offer.ratePlanName,
+      cabin: '',
+      baseAmountCents: offer.totalCents,
+      currency: offer.currency,
+    };
+  }
+
+  const fare = (offer.fare ?? {}) as Record<string, unknown>;
+  const segment = ((offer.segments as Record<string, unknown>[]) ?? [{}])[0] ?? {};
   return {
     id: String(offer.id),
-    productType: 'flights',
+    productType: 'flight',
     origin: segment.origin,
     destination: segment.destination,
     departDate: String(segment.departAt ?? '').slice(0, 10),
     returnDate: body.returnDate ?? undefined,
-    fareClass: fare.basis,
+    fareClass: fare.fareClassCode,
     cabin: fare.cabin,
-    baseAmountCents: fare.baseAmountCents,
+    baseAmountCents: fare.baseCents,
     currency: fare.currency,
   };
 }
