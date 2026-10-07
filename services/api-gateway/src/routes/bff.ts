@@ -36,7 +36,11 @@ export function registerBffRoutes(app: FastifyInstance, deps: Deps): void {
         body: dealSearch(),
         requestId: request.id,
         timeoutMs: 8000,
-      }).then((result) => result.body),
+      }).then(async (result) => {
+        const search = dealSearch();
+        const cityName = await cityNameFor(deps, String(search.destination));
+        return summariseDeals(result.body, cityName);
+      }),
 
       loyalty: principal
         ? callService<Record<string, unknown>>('loyalty', {
@@ -58,7 +62,7 @@ export function registerBffRoutes(app: FastifyInstance, deps: Deps): void {
 
     return {
       popularAirports: results.airports ?? [],
-      deals: summariseDeals(results.deals),
+      deals: results.deals ?? [],
       loyalty: results.loyalty,
       upcomingTrips: results.upcoming ?? [],
       // Naming what did not load lets the UI show a retry on one panel
@@ -380,10 +384,64 @@ function dealSearch(): Record<string, unknown> {
   };
 }
 
-function summariseDeals(deals: unknown): unknown[] {
+async function cityNameFor(deps: Deps, iata: string): Promise<string> {
+  try {
+    const { rows } = await deps.pool.query<{ name: string }>(
+      `SELECT c.name AS name
+       FROM voyager.airports a
+       JOIN voyager.cities c ON c.id = a.city_id
+       WHERE a.iata_code = $1`,
+      [iata],
+    );
+    return rows[0]?.name ?? iata;
+  } catch {
+    return iata;
+  }
+}
+
+/**
+ * Search speaks fares and segments. The home cards speak city, headline,
+ * price, and an image seed. Passing the raw offer through leaves the picture
+ * URL as /hotels/NaN-sm.png and the price as £NaN.
+ */
+function summariseDeals(deals: unknown, cityName: string): unknown[] {
   if (!deals || typeof deals !== 'object') return [];
   const results = (deals as { results?: unknown[] }).results ?? [];
-  return results.slice(0, 4);
+  return results.slice(0, 4).map((item) => toDeal(item, cityName));
+}
+
+function toDeal(item: unknown, cityName: string): Record<string, unknown> {
+  const offer = (item ?? {}) as Record<string, unknown>;
+  if (typeof offer.fromPriceCents === 'number' && typeof offer.imageSeed === 'number') {
+    return offer;
+  }
+
+  const fare = (offer.fare ?? {}) as Record<string, unknown>;
+  const segments = Array.isArray(offer.segments)
+    ? (offer.segments as Record<string, unknown>[])
+    : [];
+  const first = segments[0] ?? {};
+  const last = segments[segments.length - 1] ?? first;
+  const airline = (offer.airline ?? {}) as Record<string, unknown>;
+  const logoSeed = Number(airline.logoSeed);
+
+  return {
+    id: String(offer.id ?? ''),
+    productType: offer.productType === 'hotel' ? 'hotel' : 'flight',
+    origin: typeof first.origin === 'string' ? first.origin : null,
+    destination: typeof last.destination === 'string' ? last.destination : null,
+    cityName,
+    headline: typeof airline.name === 'string' ? airline.name : 'Economy fare',
+    fromPriceCents: Number(fare.totalCents ?? 0),
+    currency: typeof fare.currency === 'string' ? fare.currency : 'GBP',
+    imageSeed: Number.isFinite(logoSeed) ? Math.abs(logoSeed) % 16 : seedFrom(String(offer.id ?? '')),
+  };
+}
+
+function seedFrom(value: string): number {
+  let hash = 0;
+  for (const char of value) hash = (hash + char.charCodeAt(0)) % 16;
+  return hash;
 }
 
 function priceRequest(
