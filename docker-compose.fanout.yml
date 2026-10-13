@@ -1,0 +1,25 @@
+# Opt-in: make the Agent tail the files from scripts/fanout-logs.py.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.fanout.yml up -d datadog-agent
+#
+# The base stack leaves this off. Tailing ~1800 files raises Agent CPU and
+# sends those lines to Datadog, so turn the overlay off again when the
+# scenario is finished.
+
+name: voyager
+
+services:
+  datadog-agent:
+    environment:
+      # The Agent otherwise keeps about 500 files open and ignores the rest.
+      DD_LOGS_CONFIG_OPEN_FILES_LIMIT: "2500"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - ./var/fanout-logs:/var/log/voyager-fanout:ro
+      - ./infra/datadog/conf.d/fanout.d:/etc/datadog-agent/conf.d/fanout.d:ro
+    # The base container is capped at 768m. Holding 1800 tailers needs more
+    # than that, and an OOM restart hides the CPU spike.
+    mem_limit: 1536m

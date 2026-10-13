@@ -44,6 +44,7 @@ junit*.xml
 .data/
 tmp/
 *.log
+var/fanout-logs/
 
 # ---- OS / editor ----
 .DS_Store

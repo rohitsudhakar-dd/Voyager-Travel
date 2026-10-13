@@ -1,0 +1,10 @@
+# Tails the files created by scripts/fanout-logs.py.
+# Mounted only by docker-compose.fanout.yml, so a normal `make up` does not
+# collect them.
+logs:
+  - type: file
+    path: /var/log/voyager-fanout/*.log
+    service: voyager-fanout
+    source: fanout
+    tags:
+      - scenario:many-files
