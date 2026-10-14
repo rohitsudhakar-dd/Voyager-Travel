@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectBrand, formatCardNumber } from './cardBrand';
+import { detectBrand, formatCardNumber, formatExpiry } from './cardBrand';
 import { passesLuhn } from '@voyager/shared-schemas';
 
 describe('card entry', () => {
@@ -14,6 +14,12 @@ describe('card entry', () => {
     expect(formatCardNumber('4242424242424242')).toBe('4242 4242 4242 4242');
     expect(formatCardNumber('34000000000000')).toBe('3400 000000 0000');
     expect(formatCardNumber('42')).toBe('42');
+  });
+
+  it('inserts the expiry slash as the digits arrive', () => {
+    expect(formatExpiry('1229')).toBe('12 / 29');
+    expect(formatExpiry('12 / 29')).toBe('12 / 29');
+    expect(formatExpiry('1')).toBe('1');
   });
 
   it('accepts the documented test cards and rejects a transposed digit', () => {

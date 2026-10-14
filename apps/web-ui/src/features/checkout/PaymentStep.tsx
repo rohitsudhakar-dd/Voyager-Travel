@@ -23,7 +23,7 @@ import { startTiming, stopTiming } from '@/datadog/rum';
 import { formatMoney } from '@/lib/format';
 import { idempotencyKey } from '@/lib/ids';
 import { CheckoutShell, CheckoutSkeleton, HoldExpired } from './CheckoutShell';
-import { detectBrand, formatCardNumber } from './cardBrand';
+import { detectBrand, formatCardNumber, formatExpiry } from './cardBrand';
 
 /** The five codes `mock-payments` can produce (05-FUNCTIONALITY.md § 5.2). */
 const DECLINE_COPY: Record<DeclineCode, string> = {
@@ -96,10 +96,13 @@ export default function PaymentStep() {
   const form = useForm<PaymentForm>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      holderName: '',
-      number: '',
-      expiry: '',
-      cvc: '',
+      // The card mock-payments always approves. A blank form rejects almost
+      // every hand-typed number, because the field requires a Luhn check and
+      // an expiry written as MM / YY.
+      holderName: 'A Traveller',
+      number: '4242 4242 4242 4242',
+      expiry: '12 / 29',
+      cvc: '123',
       billingCountry: 'GB',
     },
   });
@@ -263,7 +266,11 @@ export default function PaymentStep() {
               data-testid="card-expiry"
               data-dd-privacy="mask"
               error={form.formState.errors.expiry?.message}
-              {...form.register('expiry')}
+              {...form.register('expiry', {
+                onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+                  event.target.value = formatExpiry(event.target.value);
+                },
+              })}
             />
 
             <Input

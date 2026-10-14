@@ -23,6 +23,13 @@ export function detectBrand(number: string): CardBrand {
   return match ? { name: match.name, cvcLength: match.cvcLength } : UNKNOWN_BRAND;
 }
 
+/** `MM / YY`, inserted as the digits arrive so `1229` is a valid expiry. */
+export function formatExpiry(value: string): string {
+  const digits = value.replace(/\D/g, '').slice(0, 4);
+  if (digits.length <= 2) return digits;
+  return `${digits.slice(0, 2)} / ${digits.slice(2)}`;
+}
+
 /** 4-4-4-4, or 4-6-5 for the 15-digit scheme. */
 export function formatCardNumber(value: string): string {
   const digits = value.replace(/\D/g, '').slice(0, 19);
