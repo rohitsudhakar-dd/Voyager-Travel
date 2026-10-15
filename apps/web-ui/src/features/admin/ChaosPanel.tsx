@@ -162,7 +162,7 @@ function FlagRow({
 
       <div className="flex flex-wrap items-center gap-2 pl-12">
         <p className="text-body-sm text-fg-muted">{flag.description}</p>
-        {flag.scenarios.length > 0 ? (
+        {(flag.scenarios ?? []).length > 0 ? (
           <span className="flex gap-1">
             {flag.scenarios.map((scenario) => (
               <Badge key={scenario} intent="neutral" size="sm" className="font-mono">

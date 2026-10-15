@@ -108,7 +108,7 @@ function ScenarioCard({
       <p className="text-body-sm text-fg-muted">{scenario.story}</p>
 
       <dl className="space-y-1 font-mono text-mono-sm text-fg-muted">
-        {Object.entries(scenario.flags).map(([name, value]) => (
+        {Object.entries(scenario.flags ?? {}).map(([name, value]) => (
           <div key={name} className="flex gap-2">
             <dt className="truncate">{name}</dt>
             <dd className="ml-auto shrink-0 text-fg">{JSON.stringify(value)}</dd>

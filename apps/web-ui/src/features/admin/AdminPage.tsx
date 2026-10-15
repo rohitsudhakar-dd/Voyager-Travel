@@ -92,7 +92,9 @@ function Console({ onSignOut }: { onSignOut: () => void }) {
   const status = useAdminStatus(true);
   const chaos = useChaosCatalog(true);
 
-  const activeCount = status.data?.activeFlagCount ?? chaos.data?.activeFlags.length ?? 0;
+  const reportedFlags = (status.data as { activeFlags?: string[] } | undefined)?.activeFlags;
+  const activeCount =
+    status.data?.activeFlagCount ?? reportedFlags?.length ?? chaos.data?.activeFlags?.length ?? 0;
 
   return (
     <div className="min-h-screen bg-bg text-fg">

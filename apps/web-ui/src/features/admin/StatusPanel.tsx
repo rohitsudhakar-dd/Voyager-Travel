@@ -33,11 +33,13 @@ export function StatusPanel() {
       ) : (
         <>
           <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {status.data!.services.map((service) => (
+            {(status.data?.services ?? []).map((service) => (
               <ServiceCard key={service.name} service={service} />
             ))}
           </ul>
-          <InfraStrip status={status.data!} />
+          {status.data?.postgres && status.data.redis && status.data.kafka ? (
+            <InfraStrip status={status.data} />
+          ) : null}
         </>
       )}
     </div>
